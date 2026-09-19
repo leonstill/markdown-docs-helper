@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" class="preload">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Markdown 文档浏览器</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b6bcb'/%3E%3Cpath d='M4.5 3.5h4l3 3v6h-7z' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/viewer.css">
+</head>
+<body>
+
+<header class="topbar">
+  <button class="btn icon" id="toggleLeft" title="显示/隐藏左侧目录栏（快捷键 [ ）" aria-pressed="false" aria-controls="sidebar">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor"/><line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor"/></svg>
+  </button>
+  <div class="brand"><span class="logo" aria-hidden="true"></span><span id="brandTitle">文档浏览器</span> <span class="bs" id="brandSub"></span></div>
+  <div class="grow"><div class="path" id="docPath"></div></div>
+  <button class="btn" id="prevBtn" title="上一篇">‹<span class="lbl"> 上一篇</span></button>
+  <button class="btn" id="nextBtn" title="下一篇"><span class="lbl">下一篇 </span>›</button>
+  <button class="btn" id="printBtn" title="打印 / 导出 PDF">打印</button>
+  <button class="btn" id="linkBtn" title="复制当前文档链接">链接</button>
+  <button class="btn" id="themeBtn" title="切换深/浅色">深色</button>
+  <button class="btn icon" id="toggleRight" title="显示/隐藏右侧目录栏（快捷键 ] ）" aria-pressed="true" aria-controls="tocPane">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor"/><line x1="10" y1="2.5" x2="10" y2="13.5" stroke="currentColor"/></svg>
+  </button>
+</header>
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="pane-h">
+      <span class="pane-t" id="sidebarTitle">文档目录</span>
+      <button class="pane-x" id="closeLeft" title="隐藏左侧目录栏" aria-label="隐藏左侧目录栏">✕</button>
+    </div>
+    <div class="search-wrap" id="searchWrap">
+      <input id="search" type="search" placeholder="搜索文件名 / 全文…  ( / 聚焦 )" autocomplete="off" spellcheck="false">
+    </div>
+    <nav class="tree" id="tree"></nav>
+    <div class="sidebar-foot" id="foot"></div>
+  </aside>
+
+  <main>
+    <article class="article" id="article"></article>
+  </main>
+
+  <aside class="toc" id="tocPane">
+    <div class="pane-h">
+      <span class="pane-t" id="tocTitle">本篇目录</span>
+      <button class="pane-x" id="closeRight" title="隐藏右侧目录栏" aria-label="隐藏右侧目录栏">✕</button>
+    </div>
+    <ul class="toc-list" id="tocList"></ul>
+  </aside>
+</div>
+
+<div id="scrim"></div>
+
+<!-- ==================================================================
+     页面配置：对应工程根目录下 config.json 的内容。
+     由 build-docs.mjs 写入，不要手工编辑这里的 JSON —— 请改 config.json。
+     改完在 file:// 下重跑一次构建生效；http 实时模式下刷新页面即可生效。
+     ================================================================== -->
+<script id="viewer-config" type="application/json"></script>
+
+<!-- ==================================================================
+     文档数据快照。两个产物在这里分道扬镳：
+       md-viewer.html（离线单文件）—— 写入全部文档正文，file:// 下直接可读
+       index.html     （实时服务版）—— 置为 {}，每次刷新都去 fetch docs-index.json，
+                                        留一份旧快照只会误导
+     ================================================================== -->
+<script id="docs-snapshot" type="application/json"></script>
+
+<!-- ==================================================================
+     思维导图引擎占位（vendor/markmap/*，MIT，见 vendor/markmap/README.md）。
+     构建时由 build-docs.mjs 填进下面三个空块，两个产物填法不同：
+       md-viewer.html —— 整段内联引擎源码（file:// 页面无法加载外部脚本）
+       index.html     —— 换成 script 标签，src 指向 vendor/markmap/ 下的本地文件
+     顺序不能改：d3 → markmap-lib → markmap-view（view 是 (this.markmap, d3) 形式的 IIFE）。
+     ================================================================== -->
+<script id="vendor-d3"></script>
+<script id="vendor-markmap-lib"></script>
+<script id="vendor-markmap-view"></script>
+
+<script id="mindmap-core" src="assets/mindmap-core.js"></script>
+
+<script id="md-core" src="assets/md-core.js"></script>
+
+<script id="md-app" src="assets/md-app.js"></script>
+</body>
+</html>

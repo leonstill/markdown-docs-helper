@@ -51,7 +51,11 @@ const PROBE = `(function(){
     introHasList: !!document.querySelector('#article .intro ul'),
     cards: document.querySelectorAll('.card').length,
     docitems: document.querySelectorAll('#tree .docitem').length,
-    titles: [].slice.call(document.querySelectorAll('#tree .docitem .t')).map(function(e){return e.textContent.trim();}),
+    /* .t 里除了标题还可能带「导图」小标记（思维导图条目），取标题时把它排除 */
+    titles: [].slice.call(document.querySelectorAll('#tree .docitem .t')).map(function(e){
+      var c = e.querySelector('.chip-mm'); if (c) c.remove();
+      return e.textContent.trim();
+    }),
     dirs: dirs,
     notice: txt('#article .notice'),
     foot: txt('#foot'),

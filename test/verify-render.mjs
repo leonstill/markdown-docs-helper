@@ -1,7 +1,7 @@
 /* =====================================================================
  * 渲染器回归测试（纯 Node，不需要浏览器）
  *
- * 做法：把 md-viewer.html 里的 md-core 脚本块抽出来 require 进来，
+ * 做法：把 assets/md-core.js（渲染器源码，页面用 <script src> 外链它）读进来 require，
  *       用它渲染 docs/ 与 test/fixtures/ 下的全部 markdown，然后与
  *       「独立写的源码扫描器」交叉验证：
  *         · 标题数 / 表格数 / 围栏数 / 分隔线数与源码一致
@@ -18,20 +18,20 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
-const html = fs.readFileSync(path.join(ROOT, 'md-viewer.html'), 'utf8');
+const ASSETS = path.join(ROOT, 'assets');
 
-function extract(id) {
-  const re = new RegExp('<script id="' + id + '">([\\s\\S]*?)</script>');
-  const m = re.exec(html);
-  if (!m) throw new Error('未找到脚本块 ' + id);
-  return m[1];
+/* 渲染器与应用逻辑的源码在 assets/ 下（页面用 <script src> 外链），这里直接读文件 */
+function readAsset(name) {
+  const p = path.join(ASSETS, name);
+  if (!fs.existsSync(p)) throw new Error('未找到 ' + path.relative(ROOT, p));
+  return fs.readFileSync(p, 'utf8');
 }
 
-/* 抽出来的脚本放进 test/.cache/ 便于排查 */
+/* 源码同时留一份到 test/.cache/ 便于排查 */
 const CACHE = path.join(HERE, '.cache');
 fs.mkdirSync(CACHE, { recursive: true });
-fs.writeFileSync(path.join(CACHE, 'md-core.cjs'), extract('md-core'));
-fs.writeFileSync(path.join(CACHE, 'md-app.js'), extract('md-app'));
+fs.writeFileSync(path.join(CACHE, 'md-core.cjs'), readAsset('md-core.js'));
+fs.writeFileSync(path.join(CACHE, 'md-app.js'), readAsset('md-app.js'));
 
 const require = createRequire(import.meta.url);
 const Core = require(path.join(CACHE, 'md-core.cjs'));

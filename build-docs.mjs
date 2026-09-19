@@ -1,19 +1,29 @@
 #!/usr/bin/env node
 /* =====================================================================
  * markdown-docs-helper —— build-docs.mjs
- * 为 md-viewer.html 生成内置文档数据，或启动本地实时服务。
+ * 由 page.template.html 生成两个页面（离线单文件版 + 实时服务版），或启动本地实时服务。
  *
- * 重要：本脚本【只读】文档目录，绝不修改、移动、删除任何 .md 文档。
+ * 重要：本脚本【只读】文档目录，绝不修改、移动、删除任何 .md／.mermaid 文档。
  *       写入被限制在本工程内，且不允许写进文档目录（见 assertInsideRoot）：
- *         · md-viewer.html  —— 只替换其中两段 <script type="application/json">
+ *         · md-viewer.html   —— 离线单文件版：把配置、文档快照、引擎源码都填进模板的占位块
+ *         · index.html       —— 实时服务版：同一模板、同一份数据，引擎改成本地外链、
+ *                               快照置空；只在 --serve 时刷新
  *         · docs-index.json  —— 实时模式的索引
  *         · config.json      —— 仅在缺失时生成默认配置
+ *
+ * 两种页面（都不联网，只用工程内的本地资源）：
+ *   md-viewer.html  离线单文件：引擎整段内联，file:// 双击即可看（构建时刷新）
+ *   index.html      实时服务版：引擎走本地外链，浏览器可缓存（--serve 时自动生成，
+ *                   是 --serve 的默认入口；不要手工编辑，改 page.template.html 即可）
+ *   两个产物都由 page.template.html 生成，页面结构只维护这一份模板。
+ *   页面里只引用工程内的本地资源（assets/*、vendor/markmap/*），不碰任何互联网资源。
  *
  * 用法：
  *   node build-docs.mjs                       # 扫描 ./docs，刷新页面内置数据
  *   node build-docs.mjs <目录>                 # 扫描任意目录（页面内路径前缀仍为 docs/）
  *   node build-docs.mjs --check [目录]         # 只检查是否过期（过期退出码 1），不写文件
  *   node build-docs.mjs --serve [目录]         # 启动本地实时服务（默认 8899，占用则顺延）
+ *                                             #   并生成 index.html，访问 / 即进实时版
  *   node build-docs.mjs --serve --port 9000 [目录]
  *   node build-docs.mjs --help
  *
@@ -26,13 +36,14 @@
  * 两种浏览方式：
  *   1) 直接双击 md-viewer.html（file://）——使用页面内置数据，零依赖、可离线；
  *      文档变动后重跑本脚本刷新。
- *   2) node build-docs.mjs --serve —— 页面改为实时读取文档目录下的 .md，
- *      新增/修改文档刷新页面即生效，无需重新构建。
+ *   2) node build-docs.mjs --serve —— 打开 http://127.0.0.1:<端口>/ （即 index.html），
+ *      实时读取文档目录下的 .md，新增/修改文档刷新页面即生效，无需重新构建。
  * ===================================================================== */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));   // 工程根
@@ -41,12 +52,31 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));   // 工程根
 const VIRTUAL_ROOT = 'docs';
 const DEFAULT_DOCS_DIR = path.join(ROOT, 'docs');
 let DOCS_DIR = DEFAULT_DOCS_DIR;
-const VIEWER = path.join(ROOT, 'md-viewer.html');
+const VIEWER = path.join(ROOT, 'md-viewer.html');       // 离线单文件版（生成物，随仓库提交）
+const INDEX_HTML = path.join(ROOT, 'index.html');       // 实时服务版（生成物，仅 --serve 时刷新）
+const TEMPLATE = path.join(ROOT, 'page.template.html'); // 两个页面唯一的布局来源
 const INDEX = path.join(ROOT, 'docs-index.json');
 const CONFIG = path.join(ROOT, 'config.json');
 const SNAPSHOT_RE = /(<script id="docs-snapshot" type="application\/json">)([\s\S]*?)(<\/script>)/;
 const CONFIG_RE = /(<script id="viewer-config" type="application\/json">)([\s\S]*?)(<\/script>)/;
 const DEFAULT_PORT = 8899;
+const VENDOR_DIR = path.join(ROOT, 'vendor', 'markmap');
+
+/* 思维导图引擎。模板里只有三个空块占位，构建时按产物填不同内容：
+     离线版 md-viewer.html —— 整段内联（file:// 页面加载不了外部脚本）
+     实时版 index.html     —— 换成 vendor/markmap/*.js 的本地外链（浏览器可缓存）
+   顺序很重要：markmap-view 的浏览器构建是 (this.markmap, d3) 形式的 IIFE，
+   依赖全局 d3 已经存在，所以 d3 必须排在最前面。 */
+const BUNDLES = [
+  { id: 'vendor-d3', file: 'd3.min.js', role: 'd3' },
+  { id: 'vendor-markmap-lib', file: 'markmap-lib.iife.js', role: 'markmap-lib' },
+  { id: 'vendor-markmap-view', file: 'markmap-view.browser.js', role: 'markmap-view' },
+];
+const bundleRe = (id) => new RegExp(`(<script id="${id}">)([\\s\\S]*?)(</script>)`);
+const VENDOR_REL = (b) => `vendor/markmap/${b.file}`;
+const vendorTag = (b) => `<script id="${b.id}" src="${VENDOR_REL(b)}"></script>`;
+/* 文档目录里哪些后缀算「文档」：.md 按 Markdown 渲染，.mermaid 按思维导图渲染 */
+const DEFAULT_MINDMAP_EXT = ['.mermaid'];
 
 /* ---------- 安全护栏：写操作只能落在工程内，且绝不能碰文档目录 ---------- */
 function assertInsideRoot(target) {
@@ -100,34 +130,135 @@ function sortDocs(docs) {
     a.path.localeCompare(b.path, 'zh-Hans-CN'));
 }
 
-/** 扫描并读取文档目录下所有 markdown（withText=false 时不带正文，供实时索引使用） */
-async function collect({ withText = true } = {}) {
+/** 把 config.mindmap.extensions 归一成小写后缀数组（如 ['.mermaid']） */
+function mindmapExts(cfg) {
+  const mm = (cfg && cfg.mindmap) || {};
+  const list = Array.isArray(mm.extensions) && mm.extensions.length ? mm.extensions : DEFAULT_MINDMAP_EXT;
+  return list
+    .map((e) => String(e).trim().toLowerCase())
+    .filter(Boolean)
+    .map((e) => (e.startsWith('.') ? e : '.' + e));
+}
+
+/** 思维导图标题：优先根节点文本（`root((文本))` / `root[文本]`），否则用文件名 */
+function mindmapTitle(text, fallback) {
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+  let seenHeader = false;
+  for (const raw of lines) {
+    if (/^\s*%%/.test(raw)) continue;                       // 注释与 init 指令
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    if (!seenHeader) {
+      if (!/^\s*mindmap\s*$/i.test(line)) continue;         // 不是 mindmap 版式就不猜标题
+      seenHeader = true;
+      continue;
+    }
+    const node = parseNodeLine(line.slice(leadingChars(line)));
+    if (node) return node.text || fallback;
+    break;
+  }
+  return fallback;
+}
+
+/* 行首空白占几个字符。注意与「缩进宽度」区分：tab 是 1 个字符、4 列宽，
+   用列宽去 slice 字符串会把正文开头的字吃掉。 */
+function leadingChars(s) {
+  let n = 0;
+  while (n < s.length && (s[n] === ' ' || s[n] === '\t')) n += 1;
+  return n;
+}
+
+/* 单行节点：`root((文本))`、`id[文本]`、`((根))`、`{{六边}}`、`)云(` … 只取展示文本。
+   与 md-viewer.html 里 mindmap-core 的规则保持一致：id 只认 ASCII 标识符，
+   避免把中文节点文字（`制表符分支`）当成 id 丢掉。 */
+function parseNodeLine(s) {
+  s = s.replace(/\s+$/, '');
+  if (!s) return null;
+  let token = '';
+  for (;;) {
+    const shaped = shapeText(s);
+    if (shaped) return shaped;
+    const m = /^([A-Za-z][A-Za-z0-9_-]*)\s*([([{)\]][\s\S]*)$/.exec(s);
+    if (!m) return { text: cleanNodeText(s) };
+    token = m[1];
+    s = m[2];
+  }
+}
+
+function pair(s, prefix, suffix) {
+  if (s.slice(0, prefix.length) !== prefix) return false;
+  if (suffix === null) return s.length > prefix.length;
+  if (s.length < prefix.length + suffix.length + 1) return false;
+  return s.slice(-suffix.length) === suffix;
+}
+
+function shapeText(s) {
+  /* 顺序要紧：先长后短，`))x((` 必须比 `)x(` 先匹配 */
+  const shapes = [['((', '))'], ['{{', '}}'], ['))', '(('], ['[', ']'], ['{', '}'], [')(', null], ['(', ')']];
+  for (const [pre, suf] of shapes) {
+    if (!pair(s, pre, suf)) continue;
+    return { text: cleanNodeText(s.slice(pre.length, suf === null ? undefined : -suf.length)) };
+  }
+  return null;
+}
+
+/* 去掉包裹文字的引号 */
+function cleanNodeText(s) {
+  const t = String(s).trim();
+  const m = /^"([\s\S]*)"$/.exec(t);
+  return (m ? m[1] : t).trim();
+}
+
+
+/** 扫描并读取文档目录下所有 markdown 与思维导图（withText=false 时不带正文，供实时索引使用） */
+async function collect({ withText = true, kinds = { md: true, mindmap: DEFAULT_MINDMAP_EXT } } = {}) {
   if (!fs.existsSync(DOCS_DIR)) throw new Error(`找不到文档目录：${DOCS_DIR}`);
+  const mmExt = kinds.mindmap || [];
   const files = await walk(DOCS_DIR);
-  const md = files.filter((f) => /\.md$/i.test(f.name));
-  const skipped = files.length - md.length;
+  const picked = files.filter((f) => {
+    const lower = f.name.toLowerCase();
+    if (/\.md$/i.test(f.name)) return !!kinds.md;
+    return mmExt.some((e) => lower.endsWith(e));
+  });
+  const skipped = files.length - picked.length;
   const docs = [];
-  for (const f of md) {
+  for (const f of picked) {
+    const kind = /\.md$/i.test(f.name) ? 'markdown' : 'mindmap';
     const st = await fsp.stat(f.full);
     const vpath = `${VIRTUAL_ROOT}/${f.rel}`;
+    const extless = f.name.replace(/\.[^.]+$/, '');
     const rec = {
       path: vpath,
       dir: path.posix.dirname(vpath),
       name: f.name,
+      kind,
       size: st.size,
       mtime: st.mtime.toISOString(),
-      title: f.name.replace(/\.md$/i, ''),
+      title: extless,
     };
     const text = await fsp.readFile(f.full, 'utf8');
-    rec.title = titleOf(text, rec.title);
+    rec.title = kind === 'mindmap' ? mindmapTitle(text, rec.title) : titleOf(text, rec.title);
     if (withText) rec.text = text;
     docs.push(rec);
   }
-  return { docs: sortDocs(docs), skipped, files: files.length, md: md.length };
+  return { docs: sortDocs(docs), skipped, files: files.length, md: picked.length };
+}
+
+function countKinds(docs) {
+  const out = { markdown: 0, mindmap: 0 };
+  docs.forEach((d) => { out[d.kind === 'mindmap' ? 'mindmap' : 'markdown'] += 1; });
+  return out;
 }
 
 function snapshotPayload(docs, skipped) {
-  return { generatedAt: new Date().toISOString(), docsRoot: VIRTUAL_ROOT + '/', count: docs.length, skipped, docs };
+  return {
+    generatedAt: new Date().toISOString(),
+    docsRoot: VIRTUAL_ROOT + '/',
+    count: docs.length,
+    kinds: countKinds(docs),
+    skipped,
+    docs,
+  };
 }
 
 function indexPayload(docs, skipped) {
@@ -135,9 +266,10 @@ function indexPayload(docs, skipped) {
     generatedAt: new Date().toISOString(),
     docsRoot: VIRTUAL_ROOT + '/',
     count: docs.length,
+    kinds: countKinds(docs),
     skipped,
     docs: docs.map((d) => ({
-      path: d.path, dir: d.dir, name: d.name,
+      path: d.path, dir: d.dir, name: d.name, kind: d.kind,
       title: d.title, size: d.size, mtime: d.mtime,
     })),
   };
@@ -173,6 +305,10 @@ function isStale(existingText, freshPayload) {
 function isConfigStale(existingText, fresh) {
   try { return canonOf(JSON.parse(existingText)) !== canonOf(fresh); }
   catch (e) { return true; }
+}
+/* 整页逐字比对前，先把快照里的 generatedAt 抹平：它每次构建都变，不代表内容过期 */
+function pageSignature(html) {
+  return createHash('sha1').update(html.replace(/("generatedAt"\s*:\s*")[^"]*(")/, '$1$2')).digest('hex');
 }
 
 /* ---------- config.json：允许注释与尾随逗号 ---------- */
@@ -227,6 +363,10 @@ const DEFAULT_CONFIG = {
   },
   toc: { title: '本篇目录', defaultOpen: true, remember: true, maxDepth: 4 },
   reading: { maxWidth: 920 },
+  mindmap: {
+    enabled: true, extensions: ['.mermaid'], initialExpandLevel: 2,
+    showOutline: true, exportImage: true,
+  },
 };
 
 async function readConfig({ createIfMissing = false } = {}) {
@@ -244,55 +384,150 @@ async function readConfig({ createIfMissing = false } = {}) {
   return { value: parseJsonc(text), source: 'file' };
 }
 
+/* 读取 vendor 下的引擎代码，准备整段内联进页面 */
+async function readBundles() {
+  const out = [];
+  for (const b of BUNDLES) {
+    const file = path.join(VENDOR_DIR, b.file);
+    let text;
+    try {
+      text = await fsp.readFile(file, 'utf8');
+    } catch (e) {
+      throw new Error(`缺少思维导图引擎文件：${path.relative(ROOT, file)}\n` +
+        '  请从 vendor/markmap/README.md 里按说明取回（或删掉 config.json 的 mindmap 配置不用该功能）。');
+    }
+    if (/<\/script/i.test(text)) {
+      throw new Error(`${path.relative(ROOT, file)} 内含 "</script"，无法安全内联`);
+    }
+    out.push({ id: b.id, file: b.file, text });
+  }
+  return out;
+}
+
+/* ---------- 两个页面的生成：模板 → 一次性替换 → md-viewer.html / index.html ----------
+   模板 page.template.html 里只有四处空占位，其余全是纯 HTML，一眼能看懂：
+     <script id="viewer-config" type="application/json"></script>   页面配置
+     <script id="docs-snapshot" type="application/json"></script>   文档快照
+     <script id="vendor-d3|markmap-lib|markmap-view"></script>      三个引擎空块
+   两个产物的差别**只有**这两处，所以用同一个替换函数、同一份文档数据生成，
+   不存在“先写一个文件再回头改另一个”的二次加工。 */
+function renderPage(template, { cfgText, snapText, bundles, mode }) {
+  const value = (id) => {
+    if (id === 'viewer-config') return cfgText;
+    if (id === 'docs-snapshot') return mode === 'realtime' ? '{}' : snapText;
+    const b = bundles.find((x) => x.id === id);
+    if (!b) throw new Error(`模板里出现了未知脚本块：${id}`);
+    /* 引擎占位：实时版整块换成指向本地文件的外链（返回 null 表示用外链标签），离线版把源码内联进来 */
+    return mode === 'realtime' ? null : '\n' + b.text + '\n';
+  };
+  /* 一次性扫描所有占位块，按出现顺序拼接，避免「替换完再去重新定位下一个」那种脆弱写法。
+     每个块都替换成完整的 <script ...>...</script>，不留半截标签。 */
+  const re = /<script id="(viewer-config|docs-snapshot|vendor-d3|vendor-markmap-lib|vendor-markmap-view)"([^>]*)>([\s\S]*?)<\/script>/g;
+  let out = '', last = 0, seen = 0, m;
+  while ((m = re.exec(template))) {
+    const id = m[1];
+    const inner = value(id);
+    const replacement = inner === null
+      ? vendorTag(bundles.find((x) => x.id === id))
+      : `<script id="${id}"${m[2]}>${inner}</script>`;
+    out += template.slice(last, m.index) + replacement;
+    last = m.index + m[0].length;
+    seen++;
+  }
+  out += template.slice(last);
+  if (seen !== 2 + bundles.length) {
+    throw new Error(`模板里的占位块数量不对：期望 ${2 + bundles.length} 个，实际 ${seen} 个`);
+  }
+  return out;
+}
+
+/* 页面里是否有指向互联网的资源引用（离线承诺的硬校验） */
+function onlineRefs(html) {
+  return [...html.matchAll(/(?:src|href)\s*=\s*["'](?:https?:)?\/\//gi)].map((m) => m[0]);
+}
+
 /* ---------- 构建 ---------- */
-async function build({ quiet = false, check = false } = {}) {
-  const { docs, skipped, files } = await collect({ withText: true });
+async function build({ quiet = false, check = false, realtimePage = false } = {}) {
+  const cfg = await readConfig({ createIfMissing: !check });
+  const { docs, skipped, files } = await collect({
+    withText: true,
+    kinds: { md: true, mindmap: mindmapExts(cfg.value) },
+  });
   const snap = snapshotPayload(docs, skipped);
   const idx = indexPayload(docs, skipped);
   const snapText = renderSnapshot(snap);
-  const cfg = await readConfig({ createIfMissing: !check });
   const cfgText = renderConfig(cfg.value);
-  const html = await fsp.readFile(VIEWER, 'utf8');
-  const m = SNAPSHOT_RE.exec(html);
-  if (!m) {
-    throw new Error(`未在 ${path.basename(VIEWER)} 中找到 <script id="docs-snapshot"> 数据块`);
-  }
-  const cm = CONFIG_RE.exec(html);
-  if (!cm) {
-    throw new Error(`未在 ${path.basename(VIEWER)} 中找到 <script id="viewer-config"> 数据块`);
-  }
-  // 快照块位置靠后，先替换它，再重新定位配置块
-  let next = html.slice(0, m.index) + m[1] + snapText + m[3] + html.slice(m.index + m[0].length);
-  const cm2 = CONFIG_RE.exec(next);
-  next = next.slice(0, cm2.index) + cm2[1] + cfgText + cm2[3] + next.slice(cm2.index + cm2[0].length);
+  const bundles = await readBundles();
+  const template = await fsp.readFile(TEMPLATE, 'utf8');
+  const next = renderPage(template, { cfgText, snapText, bundles, mode: 'offline' });
+  const realtime = renderPage(template, { cfgText, snapText, bundles, mode: 'realtime' });
 
   if (check) {
-    const snapStale = isStale(m[2], snap);
+    const viewerText = await fsp.readFile(VIEWER, 'utf8');
+    const vm = SNAPSHOT_RE.exec(viewerText);
+    const vc = CONFIG_RE.exec(viewerText);
+    const snapStale = !vm || isStale(vm[2], snap);
     const idxStale = !fs.existsSync(INDEX) || isStale(await fsp.readFile(INDEX, 'utf8'), idx);
-    const cfgStale = isConfigStale(cm[2], cfg.value);
-    if (snapStale || cfgStale || idxStale) {
-      const which = [snapStale && '页面内置文档快照', cfgStale && '页面内置配置', idxStale && 'docs-index.json'].filter(Boolean);
+    const cfgStale = !vc || isConfigStale(vc[2], cfg.value);
+    const embedded = BUNDLES.map((b) => {
+      const bm = bundleRe(b.id).exec(viewerText);
+      return bm ? bm[2].trim() : '';
+    });
+    const bundleStale = embedded.some((text, i) => text !== bundles[i].text.trim());
+    /* 真正的检验：产物应与「模板 + 当前数据」完全一致（generatedAt 除外）。
+       模板被手改、引擎没跟上、占位块填错，都会在这里露出来，不需要另写一套结构校验规则。 */
+    const viewerStale = pageSignature(viewerText) !== pageSignature(next);
+    /* index.html 是 --serve 的生成物：存在才校验 */
+    const realtimeStale = fs.existsSync(INDEX_HTML) &&
+      pageSignature(await fsp.readFile(INDEX_HTML, 'utf8')) !== pageSignature(realtime);
+    if (snapStale || cfgStale || idxStale || bundleStale || viewerStale || realtimeStale) {
+      const which = [
+        snapStale && '页面内置文档快照',
+        cfgStale && '页面内置配置',
+        idxStale && 'docs-index.json',
+        bundleStale && '页面内置思维导图引擎',
+        viewerStale && 'md-viewer.html（与 page.template.html 不一致，或模板被手改过）',
+        realtimeStale && 'index.html（实时版页面）',
+      ].filter(Boolean);
       console.error('✗ 已过期：' + which.join('、'));
       console.error('  请运行：node build-docs.mjs');
       return 1;
     }
-    console.log(`✓ 都是最新的（${docs.length} 篇文档，来自 ${path.relative(ROOT, DOCS_DIR) || '.'}，配置来自 config.json）`);
+    console.log(`✓ 都是最新的（${docs.length} 篇文档，来自 ${path.relative(ROOT, DOCS_DIR) || '.'}，配置来自 config.json` +
+      `${fs.existsSync(INDEX_HTML) ? '，index.html 实时版页面已同步' : '，index.html 尚未生成（跑 --serve 时生成）'}）`);
     return 0;
   }
+
+  // 离线承诺的硬校验：产物里不许出现指向互联网的资源引用
+  const online = onlineRefs(next);
+  if (online.length) throw new Error(`md-viewer.html 里出现了互联网资源引用：${online.join(' ')}`);
 
   assertInsideRoot(VIEWER);
   assertInsideRoot(INDEX);
   await fsp.writeFile(VIEWER, next, 'utf8');
   await fsp.writeFile(INDEX, renderIndex(idx), 'utf8');
 
+  // 实时版页面与离线版同源同数据，只是引擎走本地外链、快照置空
+  if (realtimePage) {
+    const onlineRt = onlineRefs(realtime);
+    if (onlineRt.length) throw new Error(`index.html 里出现了互联网资源引用：${onlineRt.join(' ')}`);
+    assertInsideRoot(INDEX_HTML);
+    await fsp.writeFile(INDEX_HTML, realtime, 'utf8');
+  }
+
   if (!quiet) {
     const sb = cfg.value.sidebar || {};
+    const k = countKinds(docs);
     const visible = (sb.folders && sb.folders.length) ? '仅 config.json 列出的目录' : '全部目录';
-    const hidden = Object.keys(sb.docs || {}).filter((k) => (sb.docs[k] || {}).hidden).length;
+    const hidden = Object.keys(sb.docs || {}).filter((key) => (sb.docs[key] || {}).hidden).length;
+    const mm = (cfg.value.mindmap || {});
     console.log('✓ 已刷新文档快照与页面配置');
     console.log(`  文档目录：${DOCS_DIR}${DOCS_DIR === DEFAULT_DOCS_DIR ? '' : '（命令行指定）'}`);
-    console.log(`  文档：${docs.length} 篇 markdown（扫描 ${files} 个文件，忽略 ${skipped} 个非 md 文件）`);
+    console.log(`  文档：${docs.length} 篇（markdown ${k.markdown} 篇${k.mindmap ? ` · 思维导图 ${k.mindmap} 篇` : ''}` +
+      `，扫描 ${files} 个文件，忽略 ${skipped} 个不支持的文件）`);
     docs.forEach((d) => console.log(`    · ${d.path}  ${(d.size / 1024).toFixed(1)} KB  ${d.title}`));
+    console.log(`  思维导图：${mm.enabled === false ? '已关闭（config.json mindmap.enabled = false）' :
+      `启用 · 后缀 ${mindmapExts(cfg.value).join(' ')} · 引擎已内联 ${(bundles.reduce((n, b) => n + b.text.length, 0) / 1024).toFixed(0)} KB`}`);
     console.log(`  左栏显示规则：${visible}` +
       ((sb.exclude || []).length ? ` · 排除 ${(sb.exclude || []).length} 项` : '') +
       (hidden ? ` · 隐藏 ${hidden} 篇` : ''));
@@ -313,6 +548,8 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
+  '.mermaid': 'text/plain; charset=utf-8',
+  '.mmd': 'text/plain; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
@@ -329,7 +566,7 @@ function isInside(base, target) {
   return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-async function serve(port) {
+async function serve(port, kinds) {
   const server = http.createServer(async (req, res) => {
     const send = (code, type, body) => {
       res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
@@ -346,13 +583,21 @@ async function serve(port) {
       const url = new URL(req.url, 'http://127.0.0.1');
       const pathname = decodeURIComponent(url.pathname);
 
-      if (pathname === '/' || pathname === '/index.html') {
-        res.writeHead(302, { Location: '/' + path.basename(VIEWER) });
+      // 默认入口是实时版 index.html（引擎走本地外链，比离线版轻很多）
+      if (pathname === '/') {
+        res.writeHead(302, { Location: '/index.html' });
         return res.end();
       }
+      if (pathname === '/index.html') {
+        if (!fs.existsSync(INDEX_HTML)) {
+          return send(500, MIME['.txt'], 'index.html 尚未生成，请重新运行：node build-docs.mjs --serve');
+        }
+        return sendFile(INDEX_HTML);
+      }
+      // md-viewer.html 等其它工程内文件走下面的通用静态分支
       // 实时索引：每次请求都重新扫描文档目录，因此新增文档无需重建
       if (pathname === '/docs-index.json') {
-        const { docs, skipped } = await collect({ withText: false });
+        const { docs, skipped } = await collect({ withText: false, kinds });
         return send(200, MIME['.json'], renderIndex(indexPayload(docs, skipped)));
       }
       // 页面已内置 data: 图标，这里再兜一层，避免控制台出现无谓的 404
@@ -391,7 +636,8 @@ async function serve(port) {
   const actual = await listen(port, 10);
   console.log('✓ 文档服务已启动（实时模式：修改文档后刷新页面即生效）');
   console.log(`  文档目录：${DOCS_DIR}${DOCS_DIR === DEFAULT_DOCS_DIR ? '' : '（命令行指定）'}`);
-  console.log(`  本机访问：http://127.0.0.1:${actual}/`);
+  console.log(`  本机访问：http://127.0.0.1:${actual}/          ← 实时版 index.html（引擎走本地外链）`);
+  console.log(`  离线版对照：http://127.0.0.1:${actual}/${path.basename(VIEWER)}`);
   console.log('  按 Ctrl+C 停止。');
   return actual;
 }
@@ -473,8 +719,10 @@ try {
   if (mode === 'check') {
     process.exit(await build({ check: true }));
   } else if (mode === 'serve') {
-    await build({ quiet: true });
-    await serve(port);
+    // 刷新 md-viewer.html（离线版，引擎内联），再由它派生出 index.html（实时版，引擎本地外链）
+    await build({ quiet: true, realtimePage: true });
+    const cfg = await readConfig();
+    await serve(port, { md: true, mindmap: mindmapExts(cfg.value) });
   } else {
     process.exit(await build());
   }

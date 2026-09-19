@@ -2,9 +2,11 @@
  * 静态服务冒烟测试（纯 Node，不需要浏览器）
  *
  * 覆盖实时模式的全部路由与只读保证：
- *   · /                     → 302 到 /md-viewer.html
- *   · /md-viewer.html       → 200，页面里能找到内置数据块
- *   · /docs-index.json      → 200，篇数与磁盘一致、路径都带 docs/ 前缀
+ *   · /                     → 302 到 /index.html（实时版默认入口）
+ *   · /index.html           → 200，引擎走本地外链、快照为空、无互联网资源
+ *   · /md-viewer.html       → 200，离线单文件版，引擎内联
+ *   · /vendor/markmap/*.js  → 200（实时版页面靠它们渲染思维导图）
+ *   · /docs-index.json      → 200，篇数与磁盘一致（.md + .mermaid）、路径都带 docs/ 前缀
  *   · /docs/<每篇文档>       → 200，正文非空
  *   · /docs/%2e%2e/...      → 403（目录穿越被拦）
  *   · /favicon.ico          → 204；未知路径 → 404
@@ -74,18 +76,40 @@ async function run(label, docsDir) {
   const port = await freePort();
   const { proc, base } = await start(port, docsDir);
   try {
-    // 1. 根路径重定向
+    // 1. 根路径重定向到实时版
     const root = await fetch(base + '/', { redirect: 'manual' });
-    check(root.status === 302 && /\/md-viewer\.html$/.test(root.headers.get('location') || ''),
-      'GET / 重定向到 /md-viewer.html', `${root.status} ${root.headers.get('location')}`);
+    check(root.status === 302 && /\/index\.html$/.test(root.headers.get('location') || ''),
+      'GET / 重定向到 /index.html', `${root.status} ${root.headers.get('location')}`);
 
-    // 2. 页面本体
+    // 2. 实时版页面：引擎本地外链、快照为空、无互联网资源
+    const rt = await fetch(base + '/index.html');
+    const rtText = await rt.text();
+    check(rt.status === 200 && /text\/html/.test(rt.headers.get('content-type') || ''),
+      'GET /index.html 返回 HTML', String(rt.status));
+    const bundleIds = ['vendor-d3', 'vendor-markmap-lib', 'vendor-markmap-view'];
+    check(bundleIds.every((id) => new RegExp(`<script id="${id}" src="vendor/markmap/[^"]+"></script>`).test(rtText)),
+      '实时版三个引擎都走本地外链');
+    check(/<script id="docs-snapshot" type="application\/json">\{\}<\/script>/.test(rtText),
+      '实时版内置快照为空（靠 docs-index.json 实时取）');
+    const online = [...rtText.matchAll(/(?:src|href)\s*=\s*["'](?:https?:)?\/\/[^"']*/gi)].map((m) => m[0]);
+    check(online.length === 0, '实时版没有任何互联网资源引用', online.join(' '));
+
+    // 2b. 离线版页面仍可从服务里打开（引擎内联）
     const page = await fetch(base + '/md-viewer.html');
     const pageText = await page.text();
     check(page.status === 200 && /text\/html/.test(page.headers.get('content-type') || ''),
       'GET /md-viewer.html 返回 HTML', String(page.status));
     check(pageText.includes('id="docs-snapshot"') && pageText.includes('id="md-core"'),
-      '页面里含内置数据块与渲染器');
+      '离线版页面里含内置数据块与渲染器');
+
+    // 2c. 页面外链的资源必须都能取到，否则页面会白板
+    for (const rel of ['assets/viewer.css', 'assets/mindmap-core.js', 'assets/md-core.js', 'assets/md-app.js',
+                       'vendor/markmap/d3.min.js', 'vendor/markmap/markmap-lib.iife.js', 'vendor/markmap/markmap-view.browser.js']) {
+      const r = await fetch(base + '/' + rel);
+      const body = await r.text();
+      check(r.status === 200 && body.length > 1000 && /text\/(css|javascript)/.test(r.headers.get('content-type') || ''),
+        `GET /${rel} 返回资源`, `${r.status} ${r.headers.get('content-type')} ${body.length}B`);
+    }
 
     // 3. 索引
     const idxRes = await fetch(base + '/docs-index.json');
@@ -95,7 +119,7 @@ async function run(label, docsDir) {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const p = path.join(d, e.name);
         if (e.isDirectory()) walk(p);
-        else if (/\.md$/i.test(e.name)) onDisk.push('docs/' + path.relative(realDocs, p).replace(/\\/g, '/'));
+        else if (/\.(md|mermaid)$/i.test(e.name)) onDisk.push('docs/' + path.relative(realDocs, p).replace(/\\/g, '/'));
       }
     })(realDocs);
     check(idxRes.status === 200 && idx.docs.length === onDisk.length,
@@ -103,14 +127,18 @@ async function run(label, docsDir) {
     check(idx.docs.every((d) => d.path.startsWith('docs/') && !('text' in d)),
       '索引路径统一带 docs/ 前缀、且不含正文');
     check(idx.docs.every((d) => onDisk.includes(d.path)), '索引里的每篇文档磁盘上都存在');
+    check(idx.docs.filter((d) => d.kind === 'mindmap').every((d) => /\.mermaid$/i.test(d.path)),
+      `索引里的思维导图条目后缀正确（${idx.docs.filter((d) => d.kind === 'mindmap').length} 篇）`);
 
-    // 4. 每篇文档都能按索引路径取到
+    // 4. 每篇文档都能按索引路径取到（.md 是 text/markdown，.mermaid 是 text/plain）
     const bodies = await Promise.all(idx.docs.map(async (d) => {
       const r = await fetch(base + '/' + d.path);
       const t = await r.text();
-      return r.ok && t.trim().length > 0 && /text\/markdown/.test(r.headers.get('content-type') || '');
+      const type = r.headers.get('content-type') || '';
+      const want = /\.mermaid$/i.test(d.path) ? /text\/plain/ : /text\/markdown/;
+      return r.ok && t.trim().length > 0 && want.test(type);
     }));
-    check(bodies.every(Boolean), `全部 ${idx.docs.length} 篇文档都能读到正文（text/markdown）`);
+    check(bodies.every(Boolean), `全部 ${idx.docs.length} 篇文档都能读到正文（类型正确）`);
 
     // 5. 目录穿越与 404
     //    注意不能用 /docs/%2e%2e/... —— URL 解析阶段就会把 %2e%2e 规范化掉，

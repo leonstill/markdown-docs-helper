@@ -1,21 +1,36 @@
 {
-  "generatedAt": "2026-09-19T03:23:42.905Z",
+  "generatedAt": "2026-09-19T06:50:07.691Z",
   "docsRoot": "docs/",
-  "count": 4,
-  "skipped": 0,
+  "count": 5,
+  "kinds": {
+    "markdown": 4,
+    "mindmap": 1
+  },
+  "skipped": 1,
   "docs": [
     {
       "path": "docs/示例/表格与代码.md",
       "dir": "docs/示例",
       "name": "表格与代码.md",
+      "kind": "markdown",
       "title": "表格与代码",
       "size": 2010,
       "mtime": "2026-09-19T02:49:40.200Z"
     },
     {
+      "path": "docs/示例/思维导图-结论与建议-印检贴一体设备质量追溯改造.mermaid",
+      "dir": "docs/示例",
+      "name": "思维导图-结论与建议-印检贴一体设备质量追溯改造.mermaid",
+      "kind": "mindmap",
+      "title": "印检贴一体设备质量追溯改造 · 结论与建议",
+      "size": 5306,
+      "mtime": "2026-09-19T04:07:20.541Z"
+    },
+    {
       "path": "docs/示例/Markdown 语法示例.md",
       "dir": "docs/示例",
       "name": "Markdown 语法示例.md",
+      "kind": "markdown",
       "title": "Markdown 语法示例",
       "size": 1909,
       "mtime": "2026-09-19T02:48:49.538Z"
@@ -24,17 +39,19 @@
       "path": "docs/指南/界面与快捷键.md",
       "dir": "docs/指南",
       "name": "界面与快捷键.md",
+      "kind": "markdown",
       "title": "界面与快捷键",
-      "size": 1656,
-      "mtime": "2026-09-19T02:48:42.548Z"
+      "size": 2520,
+      "mtime": "2026-09-19T06:01:17.950Z"
     },
     {
       "path": "docs/指南/快速开始.md",
       "dir": "docs/指南",
       "name": "快速开始.md",
+      "kind": "markdown",
       "title": "快速开始",
-      "size": 1939,
-      "mtime": "2026-09-19T03:23:18.072Z"
+      "size": 2265,
+      "mtime": "2026-09-19T06:01:12.625Z"
     }
   ]
 }

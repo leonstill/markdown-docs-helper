@@ -3,8 +3,8 @@
   //  config.json —— Markdown 文档浏览器的配置
   //  允许写 // 与 /* */ 注释、也允许尾随逗号，随便改，不会影响 md 文档本身。
   //  改完后：
+  //    · 实时模式（node build-docs.mjs --serve）：刷新页面即可生效（默认入口 index.html）
   //    · 双击 md-viewer.html（file://）打开：跑一次  node build-docs.mjs  再刷新页面
-  //    · 实时模式（node build-docs.mjs --serve）：刷新页面即可生效
   //  配置写错时页面会显示红色提示，并自动退回默认设置。
   // ══════════════════════════════════════════════════════════════════
 
@@ -61,5 +61,21 @@
   "reading": {
     // 正文最大宽度（像素），觉得字太长或太窄就调它
     "maxWidth": 920
+  },
+
+  // ── 思维导图（.mermaid 文件）──────────────────────────────────────
+  // 文档目录里的 .mermaid（Mermaid mindmap 版式）会渲染成可缩放、可折叠的思维导图。
+  // 渲染引擎已内置在页面里（vendor/markmap），离线也能用，不需要联网。
+  "mindmap": {
+    // 总开关：设成 false 后 .mermaid 只当普通文本显示，左栏也不再标「导图」
+    "enabled": true,
+    // 哪些后缀按思维导图渲染（写 "mermaid" 或 ".MERMAID" 都认）
+    "extensions": [".mermaid"],
+    // 打开时展开到第几层：1 = 只展开一级分支；2 = 再展开一层；0 = 全部展开；-1 = 全部折叠
+    "initialExpandLevel": 2,
+    // 右侧目录栏是否显示导图大纲（可点击定位、点三角折叠）
+    "showOutline": true,
+    // 是否显示导图工具栏上的 SVG / PNG 导出按钮
+    "exportImage": true
   }
 }
