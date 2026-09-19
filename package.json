@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "零依赖的单文件 Markdown 文档浏览器：双击即可离线阅读，或起一个本地实时服务",
+  "repository": "https://github.com/user/repo.git",
   "author": {
-    "email": "leonstill@163.com",
-    "name" : "leon"
+    "name" : "leon",
+    "email": "leonstill@163.com"
   },
   "type": "module",
   "scripts": {
