@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-09-19T06:50:07.691Z",
+  "generatedAt": "2026-09-19T09:17:30.067Z",
   "docsRoot": "docs/",
   "count": 5,
   "kinds": {
     "markdown": 4,
     "mindmap": 1
   },
-  "skipped": 1,
+  "skipped": 0,
   "docs": [
     {
       "path": "docs/示例/表格与代码.md",
@@ -18,9 +18,9 @@
       "mtime": "2026-09-19T02:49:40.200Z"
     },
     {
-      "path": "docs/示例/思维导图-结论与建议-印检贴一体设备质量追溯改造.mermaid",
+      "path": "docs/示例/思维导图-印检贴一体设备质量追溯改造.mermaid",
       "dir": "docs/示例",
-      "name": "思维导图-结论与建议-印检贴一体设备质量追溯改造.mermaid",
+      "name": "思维导图-印检贴一体设备质量追溯改造.mermaid",
       "kind": "mindmap",
       "title": "印检贴一体设备质量追溯改造 · 结论与建议",
       "size": 5306,
@@ -50,8 +50,8 @@
       "name": "快速开始.md",
       "kind": "markdown",
       "title": "快速开始",
-      "size": 2265,
-      "mtime": "2026-09-19T06:01:12.625Z"
+      "size": 2737,
+      "mtime": "2026-09-19T09:14:49.905Z"
     }
   ]
 }

@@ -25,10 +25,17 @@
  *   node build-docs.mjs --serve [目录]         # 启动本地实时服务（默认 8899，占用则顺延）
  *                                             #   并生成 index.html，访问 / 即进实时版
  *   node build-docs.mjs --serve --port 9000 [目录]
+ *   node build-docs.mjs --serve --lan [目录]   # 绑定所有网卡（0.0.0.0），同一局域网内可访问
+ *   node build-docs.mjs --serve --host 192.168.1.20 [目录]   # 只绑定指定的本机地址
  *   node build-docs.mjs --help
  *
  * 目录位置随意（写在参数前后都行），但最多只能写一个；不写就是工程自带的 ./docs。
- * 参数写错会直接报错退出，绝不会被静默忽略：未知参数、多余目录、坏的端口号都会拦下。
+ * 参数写错会直接报错退出，绝不会被静默忽略：未知参数、多余目录、坏的端口号、坏的监听地址都会拦下。
+ *
+ * 监听地址（--serve 专用）：默认只绑 127.0.0.1，也就是只有本机能打开。
+ *   --lan            = --host 0.0.0.0，绑定所有网卡，启动时会把局域网地址印出来；
+ *   --host <地址>     绑定单个地址（IP 或主机名，如 0.0.0.0、::、192.168.1.20、localhost）。
+ *   服务没有任何鉴权，--lan / --host 0.0.0.0 只适合在可信内网里用。
  *
  * 配置文件：config.json（标题、首页说明、左栏显示哪些文档、右侧目录层级等）。
  *           支持 // 与 /* *\/ 注释和尾随逗号；写错时页面会显示红色提示。
@@ -37,12 +44,15 @@
  *   1) 直接双击 md-viewer.html（file://）——使用页面内置数据，零依赖、可离线；
  *      文档变动后重跑本脚本刷新。
  *   2) node build-docs.mjs --serve —— 打开 http://127.0.0.1:<端口>/ （即 index.html），
- *      实时读取文档目录下的 .md，新增/修改文档刷新页面即生效，无需重新构建。
+ *      实时读取文档目录下的 .md，新增/修改文档刷新页面即生效，无需重新构建；
+ *      想给同一局域网里的同事看，加 --lan（等价于 --host 0.0.0.0）。
  * ===================================================================== */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
+import net from 'node:net';
+import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -60,6 +70,9 @@ const CONFIG = path.join(ROOT, 'config.json');
 const SNAPSHOT_RE = /(<script id="docs-snapshot" type="application\/json">)([\s\S]*?)(<\/script>)/;
 const CONFIG_RE = /(<script id="viewer-config" type="application\/json">)([\s\S]*?)(<\/script>)/;
 const DEFAULT_PORT = 8899;
+/* 默认只听环回：不给参数就不会把文档暴露到网络上。--lan / --host 才对外。 */
+const DEFAULT_HOST = '127.0.0.1';
+const LAN_HOST = '0.0.0.0';         // --lan 的等价写法：所有网卡
 const VENDOR_DIR = path.join(ROOT, 'vendor', 'markmap');
 
 /* 思维导图引擎。模板里只有三个空块占位，构建时按产物填不同内容：
@@ -536,6 +549,7 @@ async function build({ quiet = false, check = false, realtimePage = false } = {}
     console.log('');
     console.log('  直接双击打开：md-viewer.html');
     console.log('  实时浏览（文档/配置改动无需重建）：node build-docs.mjs --serve');
+    console.log('  局域网共享（绑定所有网卡）：node build-docs.mjs --serve --lan');
   }
   return 0;
 }
@@ -566,7 +580,51 @@ function isInside(base, target) {
   return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-async function serve(port, kinds) {
+/* ---------- 监听地址：默认只听环回，--lan / --host 才对外 ---------- */
+
+/** URL 里的主机名：IPv6 字面量要加方括号（http://[::1]:8899/） */
+function hostForUrl(host) { return host.includes(':') ? `[${host}]` : host; }
+
+/** 是不是「只有本机能连」的地址（用来决定提示语和是否补印局域网地址） */
+function isLoopbackHost(host) {
+  return host === 'localhost' || host === '::1' || /^127\./.test(host);
+}
+
+/** 绑定 0.0.0.0 / :: 时，列出本机各网卡的 IPv4，供使用者直接抄给同事 */
+function lanAddresses() {
+  const out = [];
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) {
+      if (a.internal || a.family !== 'IPv4') continue;
+      out.push(a.address);
+    }
+  }
+  return [...new Set(out)];
+}
+
+/** 解析 --host 的值：IP 字面量（v4/v6，允许 [::1] 写法）或主机名，其它一律拒绝 */
+function normalizeHost(value) {
+  const s = String(value).trim();
+  if (!s) return null;
+  if (net.isIP(s)) return s;
+  if (s.length > 2 && s.startsWith('[') && s.endsWith(']') && net.isIP(s.slice(1, -1))) return s.slice(1, -1);
+  return /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(s) ? s : null;
+}
+
+/** 把 bind 失败翻译成能照着改的提示 */
+function bindError(err, host) {
+  const tip = {
+    EADDRNOTAVAIL: `本机没有这个地址：${host}（用 ipconfig / ifconfig 看一眼本机 IP，或直接用 --lan 绑定所有网卡）`,
+    ENOTFOUND: `解析不了这个主机名：${host}`,
+    EACCES: `没有权限绑定 ${host}（端口小于 1024 需要管理员权限，换个大端口或用 --port 指定）`,
+    EAFNOSUPPORT: `本机不支持这种地址：${host}`,
+  }[err.code];
+  const e = new Error(tip || `无法绑定 ${host}：${err.message}`);
+  e.cause = err;
+  return e;
+}
+
+async function serve(port, kinds, host = DEFAULT_HOST) {
   const server = http.createServer(async (req, res) => {
     const send = (code, type, body) => {
       res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
@@ -625,26 +683,61 @@ async function serve(port, kinds) {
     }
   });
 
+  /* 端口被占用就从 port+1 顺延，最多试 10 个；绑定地址坏了则直接报错说清原因 */
+  const MAX_TRIES = 10;
   const listen = (p, tries) => new Promise((resolve, reject) => {
     server.once('error', (err) => {
-      if (err.code === 'EADDRINUSE' && tries > 0) resolve(listen(p + 1, tries - 1));
-      else reject(err);
+      if (err.code === 'EADDRINUSE' && tries > 0) return resolve(listen(p + 1, tries - 1));
+      if (err.code === 'EADDRINUSE') {
+        return reject(new Error(`从端口 ${port} 起连续 ${MAX_TRIES + 1} 个端口都被占用，用 --port 换一个空闲端口`));
+      }
+      reject(bindError(err, host));
     });
-    server.listen(p, '127.0.0.1', () => resolve(p));
+    server.listen(p, host, () => resolve(p));
   });
 
-  const actual = await listen(port, 10);
+  const actual = await listen(port, MAX_TRIES);
+
+  /* 该印哪些访问地址：绑定具体地址就只印它；绑到 0.0.0.0/:: 就把环回与各网卡都印出来 */
+  const wildcard = host === LAN_HOST || host === '::';
+  const entries = [];
+  const add = (h, label) => {
+    const url = `http://${hostForUrl(h)}:${actual}/`;
+    if (!entries.some((e) => e.url === url)) entries.push({ url, label });
+  };
+  if (wildcard) {
+    add('127.0.0.1', '本机访问');
+    if (host === '::') add('::1', '本机访问');
+    lanAddresses().forEach((ip) => add(ip, '局域网访问'));
+  } else {
+    add(host, isLoopbackHost(host) ? '本机访问' : '指定地址访问');
+  }
+
+  const width = Math.max(...entries.map((e) => e.url.length));
   console.log('✓ 文档服务已启动（实时模式：修改文档后刷新页面即生效）');
   console.log(`  文档目录：${DOCS_DIR}${DOCS_DIR === DEFAULT_DOCS_DIR ? '' : '（命令行指定）'}`);
-  console.log(`  本机访问：http://127.0.0.1:${actual}/          ← 实时版 index.html（引擎走本地外链）`);
-  console.log(`  离线版对照：http://127.0.0.1:${actual}/${path.basename(VIEWER)}`);
+  console.log(`  监听地址：${hostForUrl(host)}:${actual}` +
+    (wildcard ? `（所有网卡，同一网络内的其它机器可以访问）` :
+      isLoopbackHost(host) ? `（仅本机）` : `（指定地址）`));
+  entries.forEach((e) => {
+    const tail = e.url === entries[0].url ? '  ← 实时版 index.html（引擎走本地外链）' : '';
+    console.log(`  ${e.label}：${e.url.padEnd(width)}${tail}`);
+  });
+  console.log(`  离线版对照：${entries[0].url}${path.basename(VIEWER)}`);
+  if (wildcard) {
+    console.log('  提示：服务没有鉴权，文档内容对同一网络可见，只在可信内网里这么用。');
+  } else if (isLoopbackHost(host)) {
+    console.log('  想让同一局域网的同事也能看：node build-docs.mjs --serve --lan');
+  } else {
+    console.log('  提示：服务没有鉴权，文档内容对能连到这个地址的人可见，只在可信内网里这么用。');
+  }
   console.log('  按 Ctrl+C 停止。');
   return actual;
 }
 
 /* ---------- CLI ----------
-   参数解析刻意严格：只认下面这些写法，多一个未知参数、多一个目录、坏的端口号
-   都直接报错退出。以前那种“写了但被忽略”的情况不会再出现。 */
+   参数解析刻意严格：只认下面这些写法，多一个未知参数、多一个目录、坏的端口号、
+   坏的监听地址都直接报错退出。以前那种“写了但被忽略”的情况不会再出现。 */
 const argv = process.argv.slice(2);
 
 function printHelp() {
@@ -668,6 +761,8 @@ const MODE_FLAGS = new Map([['--serve', 'serve'], ['--check', 'check']]);
 let mode = 'build';           // build | check | serve
 let port = DEFAULT_PORT;
 let portGiven = false;
+let host = DEFAULT_HOST;      // 监听地址：默认只听环回
+let hostFlag = null;          // 记下是用 --host 还是 --lan 指定的（重复/混用要报错）
 let docsDir = null;           // 命令行指定的文档目录（最多一个）
 
 for (let i = 0; i < argv.length; i++) {
@@ -692,6 +787,26 @@ for (let i = 0; i < argv.length; i++) {
     port = Number(v);
     portGiven = true;
     i++;
+  } else if (a === '--host') {
+    const v = argv[i + 1];
+    if (hostFlag) cliError(`${a} 与 ${hostFlag} 只能选一个（监听地址已经用 ${hostFlag} 指定过了）`);
+    if (v === undefined || v.startsWith('-')) {
+      cliError('--host 后面要跟监听地址，例如：node build-docs.mjs --serve --host 0.0.0.0');
+    }
+    const parsed = normalizeHost(v);
+    if (!parsed) {
+      if (v.includes('://') || /:\d+$/.test(v) || v.includes('/')) {
+        cliError(`--host 只写地址本身，端口用 --port 指定（收到：${v}）`);
+      }
+      cliError(`--host 只接受 IP 或主机名（如 0.0.0.0、::、192.168.1.20、localhost），收到：${v}`);
+    }
+    host = parsed;
+    hostFlag = '--host';
+    i++;
+  } else if (a === '--lan') {
+    if (hostFlag) cliError(`${a} 与 ${hostFlag} 只能选一个（监听地址已经用 ${hostFlag} 指定过了）`);
+    host = LAN_HOST;
+    hostFlag = '--lan';
   } else if (a === '--docs') {
     cliError('--docs 已取消：目录直接写在参数后面即可，例如：node build-docs.mjs --serve D:\\some\\docs');
   } else if (a.startsWith('-') && a !== '-') {
@@ -706,6 +821,9 @@ for (let i = 0; i < argv.length; i++) {
 
 if (portGiven && mode !== 'serve') {
   cliError('--port 只在 --serve 模式下有效，例如：node build-docs.mjs --serve --port 9000');
+}
+if (hostFlag && mode !== 'serve') {
+  cliError(`${hostFlag} 只在 --serve 模式下有效，例如：node build-docs.mjs --serve --lan`);
 }
 
 if (docsDir !== null) {
@@ -722,7 +840,7 @@ try {
     // 刷新 md-viewer.html（离线版，引擎内联），再由它派生出 index.html（实时版，引擎本地外链）
     await build({ quiet: true, realtimePage: true });
     const cfg = await readConfig();
-    await serve(port, { md: true, mindmap: mindmapExts(cfg.value) });
+    await serve(port, { md: true, mindmap: mindmapExts(cfg.value) }, host);
   } else {
     process.exit(await build());
   }

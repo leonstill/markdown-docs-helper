@@ -13,10 +13,11 @@
 | `check-viewer.mjs` | 页面自检：`page.template.html` 标签配对与占位块是否为空、外链资源齐全、CSS 括号平衡与关键声明、离线产物里 JSON 可解析且引擎已内联、脚本语法（`assets/` 三段 + 内联引擎）、关键 JS 钩子 | `node test/check-viewer.mjs` |
 | `check-realtime.mjs` | 实时版页面 `index.html`：三个引擎都是本地外链且块内无残留源码、内置快照已置空、**没有任何互联网资源引用**、引用的本地文件都真实存在、外壳与模板一致 | `node test/check-realtime.mjs` |
 | `why-stale.mjs` | 诊断 `--check` 为什么说过期：逐条列出「新增 / 有变化 / 已删除」的文档 | `node test/why-stale.mjs [目录]` |
-| `cli-args.mjs` | 命令行参数回归：`--docs` / 未知参数 / 多余目录 / 不存在的目录 / 坏端口 / `--serve` 与 `--check` 混用都必须报错退出，而位置目录写法要真的生效（末尾会用默认 `docs/` 重建产物） | `node test/cli-args.mjs` |
+| `cli-args.mjs` | 命令行参数回归：`--docs` / 未知参数 / 多余目录 / 不存在的目录 / 坏端口 / 坏监听地址（`--host` 缺值、带端口、非法地址、重复、与 `--lan` 混用、没配 `--serve`）/ `--serve` 与 `--check` 混用都必须报错退出，而位置目录写法要真的生效（末尾会用默认 `docs/` 重建产物） | `node test/cli-args.mjs` |
 | `serve-smoke.mjs` | 实时模式冒烟：`/` 重定向到实时版 `index.html`、实时版引擎外链且零外部资源、离线版仍可访问、全部本地资源可取、索引、每篇文档正文（`.md` → text/markdown，`.mermaid` → text/plain）、目录穿越拦截、404/204，并核对跑完以后文档目录的文件清单与 mtime 没变（只读保证） | `node test/serve-smoke.mjs [目录]` |
+| `serve-host.mjs` | 监听地址回归：默认只绑 `127.0.0.1`（本机 IP 连不上、也不打印局域网地址）、`--lan` 真的绑到所有网卡（从本机 IP 回连成功并打印该地址）、`--host <本机IP>` 只绑这个地址、`--host <不存在的地址>` 立刻报错退出 | `node test/serve-host.mjs` |
 
-以上八合一就是 `npm test`（会先跑一次 `node build-docs.mjs` 保证产物是新的）。改动 `page.template.html`、`assets/` 下的样式或脚本、或文档之后先跑它们，几秒内能发现大部分低级错误。
+以上九合一就是 `npm test`（会先跑一次 `node build-docs.mjs` 保证产物是新的）。改动 `page.template.html`、`assets/` 下的样式或脚本、或文档之后先跑它们，几秒内能发现大部分低级错误。
 
 `verify-render.mjs` 会产生 `test/.cache/`（复制一份 `md-core.cjs` 与 `md-app.js` 供排查），已加入 `.gitignore`。
 

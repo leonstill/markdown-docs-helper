@@ -8,6 +8,8 @@
  *   · --docs 已取消 → 报错并给出新写法
  *   · 未知参数 / 多余的目录 / 不存在的目录 / 目录位置写了文件 → 报错
  *   · --port 缺值、非数字、超范围、重复、没配 --serve → 报错
+ *   · --host 缺值、带端口/URL、非法地址、重复、与 --lan 混用、没配 --serve → 报错
+ *   · --lan / --host 的真实绑定行为由 test/serve-host.mjs 验证
  *   · --serve 与 --check 混用 → 报错
  *   · 位置目录 + --check / 默认构建 / --help → 正常退出码 0，
  *     并核对内置索引里确实出现了那个目录下的文档（证明参数真的生效）
@@ -84,10 +86,19 @@ rejects('--port 非数字被拒绝', ['--serve', '--port', 'abc'], '只接受 1-
 rejects('--port 超范围被拒绝', ['--serve', '--port', '70000'], '只接受 1-65535');
 rejects('--port 没有 --serve 被拒绝', ['--port', '9000'], '--port 只在 --serve 模式下有效');
 rejects('--port 重复被拒绝', ['--serve', '--port', '9000', '--port', '9001'], '--port 写了两次');
+rejects('--host 缺值被拒绝', ['--serve', '--host'], '--host 后面要跟监听地址');
+rejects('--host 带端口被拒绝', ['--serve', '--host', '0.0.0.0:9000'], '端口用 --port 指定');
+rejects('--host 写成 URL 被拒绝', ['--serve', '--host', 'http://0.0.0.0'], '端口用 --port 指定');
+rejects('--host 非法地址被拒绝', ['--serve', '--host', 'not a host'], '只接受 IP 或主机名');
+rejects('--host 没有 --serve 被拒绝', ['--host', '0.0.0.0'], '--host 只在 --serve 模式下有效');
+rejects('--lan 没有 --serve 被拒绝', ['--lan'], '--lan 只在 --serve 模式下有效');
+rejects('--host 重复被拒绝', ['--serve', '--host', '0.0.0.0', '--host', '127.0.0.1'], '只能选一个');
+rejects('--host 与 --lan 混用被拒绝', ['--serve', '--lan', '--host', '0.0.0.0'], '只能选一个');
 rejects('--serve 与 --check 混用被拒绝', ['--serve', '--check'], '只能选一个');
 
 console.log('\n--- 正确写法 ---');
 accepts('--help 打印用法', ['--help'], 'node build-docs.mjs --serve [目录]');
+accepts('--help 里有局域网共享的说明', ['--help'], '--serve --lan [目录]');
 // 此刻产物是按默认 ./docs 构建的，用外部目录做 --check 应当报过期
 // （如果位置目录被忽略，这里会因为比对的是 ./docs 而误判为最新，用例就会失败）
 rejects('外部目录 + --check 认得出这个目录（过期）', ['--check', TMP_DOCS], '已过期');
