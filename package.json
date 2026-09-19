@@ -1,0 +1,25 @@
+{
+  "name": "markdown-docs-helper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "零依赖的单文件 Markdown 文档浏览器：双击即可离线阅读，或起一个本地实时服务",
+  "author": {
+    "email": "leonstill@163.com",
+    "name" : "leon"
+  },
+  "type": "module",
+  "scripts": {
+    "serve": "node build-docs.mjs --serve",
+    "build": "node build-docs.mjs",
+    "check": "node build-docs.mjs --check",
+    "test": "node build-docs.mjs && node test/verify-render.mjs && node test/check-snapshot.mjs && node test/cli-args.mjs && node test/check-viewer.mjs && node test/serve-smoke.mjs",
+    "test:cli": "node test/cli-args.mjs",
+    "test:serve": "node test/serve-smoke.mjs",
+    "test:ui": "node test/ui-verify.mjs",
+    "shots": "node test/shot-anim.mjs",
+    "stale": "node test/why-stale.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

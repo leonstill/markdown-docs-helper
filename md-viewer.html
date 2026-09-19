@@ -1,0 +1,1467 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" class="preload">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Markdown 文档浏览器</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b6bcb'/%3E%3Cpath d='M4.5 3.5h4l3 3v6h-7z' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+/* ============ 主题变量 ============ */
+:root{
+  --bg:#ffffff; --bg-soft:#f6f8fa; --bg-elev:#ffffff;
+  --fg:#1f2328; --fg-muted:#59636e; --border:#d8dee4; --border-soft:#e8ecf0;
+  --accent:#0b6bcb; --accent-soft:#e8f1fd;
+  --code-bg:#f4f6f8; --quote-bg:#f7f9fb;
+  --shadow:0 1px 3px rgba(27,31,36,.10);
+  --shadow-md:0 8px 20px -6px rgba(27,31,36,.18);
+  --accent-glow:rgba(11,107,203,.15);
+  --radius:8px;
+  --content-w:920px;
+  --left-w:286px; --right-w:246px;
+  --dur:.3s; --ease:cubic-bezier(.4,0,.2,1); --ease-out:cubic-bezier(.16,.84,.44,1);
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Source Han Sans SC",sans-serif;
+  --font-mono:"Cascadia Mono",Consolas,"JetBrains Mono","Sarasa Mono SC","Microsoft YaHei",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+html[data-theme="dark"]{
+  --bg:#0d1117; --bg-soft:#151b23; --bg-elev:#161b22;
+  --fg:#e6edf3; --fg-muted:#9198a1; --border:#30363d; --border-soft:#21262d;
+  --accent:#58a6ff; --accent-soft:#12283f;
+  --code-bg:#151b23; --quote-bg:#12181f;
+  --shadow:0 1px 3px rgba(0,0,0,.4);
+  --shadow-md:0 10px 26px -8px rgba(0,0,0,.65);
+  --accent-glow:rgba(88,166,255,.2);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg);
+  font-family:var(--font-sans); font-size:16.5px; line-height:1.8;
+  -webkit-text-size-adjust:100%;
+  transition:background-color .24s linear, color .24s linear;
+}
+/* 首屏关掉动效，避免加载瞬间侧栏“滑一下” */
+html.preload *,html.preload *::before,html.preload *::after{
+  transition:none !important; animation:none !important;
+}
+a{color:var(--accent); text-decoration:none}
+a:hover{text-decoration:underline}
+button{font-family:inherit; font-size:inherit; color:inherit; background:none; border:0; cursor:pointer}
+kbd{font-family:var(--font-mono); font-size:.8em; border:1px solid var(--border); border-bottom-width:2px;
+    border-radius:4px; padding:.05em .35em; background:var(--bg-soft)}
+
+/* ============ 顶栏 ============ */
+.topbar{
+  position:sticky; top:0; z-index:40; height:52px;
+  display:flex; align-items:center; gap:8px; padding:0 10px 0 8px;
+  background:var(--bg-elev); border-bottom:1px solid var(--border);
+  box-shadow:var(--shadow);
+  transition:background-color .24s linear, border-color .24s linear;
+}
+.topbar .brand{font-weight:700; font-size:15px; white-space:nowrap; display:flex; align-items:center; gap:7px}
+.topbar .brand .logo{
+  width:16px; height:16px; border-radius:5px; flex:0 0 auto;
+  background:linear-gradient(135deg,var(--accent),#4aa3ff);
+  box-shadow:0 1px 4px var(--accent-glow);
+  transition:transform .25s var(--ease-out), box-shadow .25s var(--ease-out);
+}
+.topbar .brand:hover .logo{transform:rotate(-8deg) scale(1.08); box-shadow:0 2px 8px var(--accent-glow)}
+.topbar .brand .bs{color:var(--fg-muted); font-weight:400}
+.topbar .grow{flex:1; min-width:0}
+.topbar .path{
+  font-family:var(--font-mono); font-size:12.5px; color:var(--fg-muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:left;
+}
+.btn{
+  display:inline-flex; align-items:center; gap:5px; height:32px; padding:0 10px;
+  border:1px solid var(--border); border-radius:6px; background:var(--bg-soft);
+  font-size:13px; white-space:nowrap; color:var(--fg); flex:0 0 auto;
+  transition:border-color .16s var(--ease), color .16s var(--ease), background-color .18s var(--ease),
+             box-shadow .2s var(--ease), transform .12s var(--ease);
+}
+.btn:hover:not([disabled]){
+  border-color:var(--accent); color:var(--accent); text-decoration:none;
+  background:var(--accent-soft); box-shadow:0 2px 10px -2px var(--accent-glow);
+}
+.btn:active:not([disabled]){transform:translateY(1px) scale(.975)}
+.btn:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.btn[disabled]{opacity:.4; cursor:default}
+.btn[disabled]:hover{border-color:var(--border); color:var(--fg)}
+.btn.icon{padding:0 7px}
+.btn.icon svg{display:block; transition:transform .22s var(--ease-out)}
+.btn.icon:hover:not([disabled]) svg{transform:scale(1.1)}
+#toggleLeft:active:not([disabled]){transform:translateX(-1px) scale(.96)}
+#toggleRight:active:not([disabled]){transform:translateX(1px) scale(.96)}
+/* 侧栏开关：按下态表示该侧栏正在显示 */
+.btn[aria-pressed="true"]{border-color:var(--accent); color:var(--accent); background:var(--accent-soft)}
+.btn[aria-pressed="true"]:hover{box-shadow:0 2px 10px -2px var(--accent-glow)}
+
+/* ============ 三栏布局（左右栏可独立隐藏，带缓动收起/展开） ============ */
+.layout{display:flex; align-items:flex-start}
+.sidebar,.toc{
+  position:sticky; top:52px; height:calc(100vh - 52px);
+  overflow-y:auto; overscroll-behavior:contain;
+  background:var(--bg-soft); flex:0 0 auto;
+  transition:margin-left var(--dur) var(--ease), width var(--dur) var(--ease),
+             opacity .26s var(--ease), background-color .24s linear,
+             border-color .24s linear, visibility 0s linear;
+}
+.sidebar{width:var(--left-w); border-right:1px solid var(--border); display:flex; flex-direction:column}
+/* 右栏自己裁剪横向、内部列表单独纵向滚动：折叠动画期间内容不重排，也不会被滚动条截掉 */
+.toc{
+  width:var(--right-w); border-left:1px solid var(--border);
+  overflow:hidden; display:flex; flex-direction:column;
+}
+/* 折叠时右栏收窄、内容由右栏自己裁剪，所以内层要保持原宽 */
+.toc>*{width:calc(var(--right-w) - 1px)}
+/* 左栏往左滑出视口：左向溢出不会产生横向滚动条（负外边距正好等于自身宽度，空间归零） */
+body.left-hidden .sidebar{
+  margin-left:calc(-1 * var(--left-w)); opacity:0; visibility:hidden;
+  transition:margin-left var(--dur) var(--ease), opacity .26s var(--ease),
+             background-color .24s linear, border-color .24s linear,
+             visibility 0s linear var(--dur);
+}
+/* 右栏收窄到 0，内层保持原宽被裁掉，视觉上同样向右滑出 */
+body.right-hidden .toc{
+  width:0; opacity:0; visibility:hidden; border-left-color:transparent;
+  transition:width var(--dur) var(--ease), opacity .26s var(--ease),
+             background-color .24s linear, border-color .24s linear,
+             visibility 0s linear var(--dur);
+}
+main{flex:1 1 auto; min-width:0; display:flex; justify-content:center}
+
+/* 侧栏标题行 + 右上角关闭按钮 */
+.pane-h{
+  display:flex; align-items:center; justify-content:space-between; gap:6px;
+  padding:8px 8px 4px 12px; font-size:11.5px; font-weight:700; letter-spacing:.06em;
+  color:var(--fg-muted);
+}
+.pane-h .pane-t{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.pane-x{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:24px; height:24px; border-radius:6px; flex:0 0 auto;
+  color:var(--fg-muted); font-size:13px; line-height:1;
+  transition:background-color .16s var(--ease), color .16s var(--ease), transform .24s var(--ease);
+}
+.pane-x:hover{background:var(--bg-elev); color:var(--accent); text-decoration:none; transform:rotate(90deg)}
+.pane-x:active{transform:rotate(90deg) scale(.88)}
+.pane-x:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+.search-wrap{padding:4px 12px 10px; border-bottom:1px solid var(--border-soft)}
+#search{
+  width:100%; height:32px; padding:0 10px; font-family:inherit; font-size:13.5px;
+  color:var(--fg); background:var(--bg); border:1px solid var(--border); border-radius:6px;
+  transition:border-color .16s var(--ease), box-shadow .2s var(--ease), background-color .24s linear;
+}
+#search:hover{border-color:var(--fg-muted)}
+#search:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+/* 滚动条：细一点，安静一点 */
+.sidebar,.toc-list,.table-wrap,.article pre.code{scrollbar-width:thin; scrollbar-color:var(--border) transparent}
+.sidebar::-webkit-scrollbar,.toc-list::-webkit-scrollbar,
+.table-wrap::-webkit-scrollbar,.article pre.code::-webkit-scrollbar{width:10px; height:10px}
+.sidebar::-webkit-scrollbar-thumb,.toc-list::-webkit-scrollbar-thumb,
+.table-wrap::-webkit-scrollbar-thumb,.article pre.code::-webkit-scrollbar-thumb{
+  background:var(--border); border:3px solid transparent; background-clip:content-box; border-radius:8px;
+}
+.sidebar::-webkit-scrollbar-thumb:hover,.toc-list::-webkit-scrollbar-thumb:hover,
+.table-wrap::-webkit-scrollbar-thumb:hover,.article pre.code::-webkit-scrollbar-thumb:hover{
+  background:var(--fg-muted); background-clip:content-box;
+}
+.tree{flex:1; padding:6px 8px 20px}
+.tree .dir{
+  padding:9px 8px 3px; font-size:12px; font-weight:700; color:var(--fg-muted);
+  display:flex; justify-content:space-between; gap:6px;
+}
+.tree .dir .n{font-weight:400; opacity:.75}
+.docitem{
+  display:block; width:100%; text-align:left; padding:6px 8px 6px 14px; border-radius:6px;
+  font-size:13.5px; line-height:1.5; color:var(--fg); border-left:2px solid transparent;
+  transition:background-color .16s var(--ease), color .16s var(--ease),
+             border-left-color .2s var(--ease), transform .18s var(--ease);
+}
+.docitem:hover{background:var(--bg-elev); text-decoration:none; transform:translateX(2px)}
+.docitem:active{transform:translateX(2px) scale(.99)}
+.docitem:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+.docitem.active{background:var(--accent-soft); color:var(--accent); border-left-color:var(--accent); font-weight:600}
+.docitem .t{display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.docitem .s{display:block; font-size:11.5px; color:var(--fg-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.docitem .hit{font-size:11px; color:var(--accent); font-family:var(--font-mono)}
+.empty{padding:14px 12px; color:var(--fg-muted); font-size:13px}
+.sidebar-foot{
+  padding:8px 12px; border-top:1px solid var(--border); font-size:11.5px;
+  color:var(--fg-muted); line-height:1.75;
+}
+.sidebar-foot .warn{color:#b3261e}
+html[data-theme="dark"] .sidebar-foot .warn{color:#ff7b72}
+
+/* ============ 目录(右侧) ============ */
+.toc-list{
+  padding:4px 8px 24px; margin:0; list-style:none;
+  flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain;
+}
+.toc-list a{
+  display:block; padding:3px 8px; font-size:13px; line-height:1.5; color:var(--fg-muted);
+  border-left:2px solid transparent; border-radius:0 4px 4px 0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  transition:color .16s var(--ease), background-color .16s var(--ease),
+             border-left-color .2s var(--ease), padding-left .18s var(--ease);
+}
+.toc-list a:hover{color:var(--fg); text-decoration:none; background:var(--bg-elev); padding-left:11px}
+.toc-list .lv3 a:hover{padding-left:23px}
+.toc-list .lv4 a:hover{padding-left:35px}
+.toc-list a.active{color:var(--accent); border-left-color:var(--accent); background:var(--accent-soft); font-weight:600}
+.toc-list a:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+.toc-list .lv3 a{padding-left:20px}
+.toc-list .lv4 a{padding-left:32px}
+.toc-empty{padding:6px 8px; color:var(--fg-muted); font-size:12.5px; line-height:1.6}
+
+/* ============ 正文 ============ */
+.article{width:100%; max-width:var(--content-w); padding:26px 40px 90px; min-width:0}
+.article h1,.article h2,.article h3,.article h4,.article h5,.article h6{
+  line-height:1.4; margin:1.6em 0 .6em; scroll-margin-top:70px; font-weight:700;
+}
+.article h1{font-size:1.85em; margin-top:.2em; padding-bottom:.35em; border-bottom:1px solid var(--border)}
+.article h2{font-size:1.42em; padding-bottom:.25em; border-bottom:1px solid var(--border-soft)}
+.article h3{font-size:1.18em}
+.article h4{font-size:1.05em}
+.article h5,.article h6{font-size:1em; color:var(--fg-muted)}
+.anchor{
+  float:left; margin-left:-.85em; padding-right:.18em; color:var(--fg-muted);
+  opacity:0; font-weight:400; text-decoration:none;
+  transition:opacity .18s var(--ease), color .18s var(--ease);
+}
+.anchor:hover{color:var(--accent)}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor,h4:hover .anchor,
+h5:hover .anchor,h6:hover .anchor{opacity:.55}
+.article p{margin:.75em 0}
+.article ul,.article ol{margin:.7em 0; padding-left:1.9em}
+.article li{margin:.3em 0}
+.article li>ul,.article li>ol{margin:.3em 0}
+.article li>p{margin:.35em 0}
+.article ul.loose>li{margin:.5em 0}
+.article hr{border:0; border-top:1px solid var(--border); margin:1.9em 0}
+.article code{
+  font-family:var(--font-mono); font-size:.88em; background:var(--code-bg);
+  border:1px solid var(--border-soft); border-radius:4px; padding:.1em .34em;
+  word-break:break-word;
+}
+.article pre.code{
+  background:var(--code-bg); border:1px solid var(--border); border-radius:var(--radius);
+  padding:12px 14px; overflow-x:auto; margin:1em 0; box-shadow:var(--shadow);
+}
+.article pre.code code{
+  background:none; border:0; padding:0; font-size:13.5px; line-height:1.7;
+  white-space:pre; tab-size:4;
+}
+.article blockquote{
+  margin:1em 0; padding:.55em 1.1em; color:var(--fg);
+  background:var(--quote-bg); border-left:3px solid var(--accent); border-radius:0 var(--radius) var(--radius) 0;
+}
+.article blockquote>:first-child{margin-top:0}
+.article blockquote>:last-child{margin-bottom:0}
+.table-wrap{overflow-x:auto; margin:1.1em 0; border:1px solid var(--border); border-radius:var(--radius)}
+.article table{border-collapse:collapse; width:100%; font-size:.9em; line-height:1.65}
+.article th,.article td{border:1px solid var(--border-soft); padding:7px 11px; text-align:left; vertical-align:top}
+.article thead th{
+  background:var(--bg-soft); font-weight:700; white-space:nowrap;
+  border-bottom:1px solid var(--border); position:relative;
+}
+.article tbody tr{transition:background-color .16s var(--ease)}
+.article tbody tr:nth-child(even){background:var(--bg-soft)}
+.article tbody tr:hover{background:var(--accent-soft)}
+.article td code,.article th code{font-size:.86em; white-space:nowrap}
+.article img{max-width:100%; height:auto}
+.article a.docref{border-bottom:1px dashed var(--accent); text-decoration:none}
+.article a.docref code{color:var(--accent); border-color:var(--accent-soft)}
+.article a.docref:hover{background:var(--accent-soft); border-radius:4px}
+.article a.secref{border-bottom:1px dotted var(--fg-muted); text-decoration:none; white-space:nowrap}
+.article a.secref:hover{color:var(--accent); border-bottom-color:var(--accent)}
+.article input[type=checkbox]{margin-right:.4em}
+.meta{
+  display:flex; flex-wrap:wrap; gap:6px 16px; align-items:center;
+  font-size:12.5px; color:var(--fg-muted); margin:0 0 22px;
+  padding-bottom:12px; border-bottom:1px solid var(--border-soft);
+}
+.meta code{font-family:var(--font-mono)}
+
+/* ============ 概览页 / 首页 ============ */
+.overview h1{margin-top:.2em}
+.intro{
+  margin:1em 0 1.6em; padding:14px 18px;
+  border:1px solid var(--border); border-left:3px solid var(--accent);
+  border-radius:0 var(--radius) var(--radius) 0; background:var(--bg-soft);
+}
+.intro>:first-child{margin-top:0}
+.intro>:last-child{margin-bottom:0}
+.intro h2,.intro h3{font-size:1.1em; margin:1em 0 .4em}
+.notice{
+  margin:1em 0; padding:10px 14px; font-size:14px; border-radius:var(--radius);
+  border:1px solid #d4a72c; background:#fff8e1; color:#7a5c00;
+}
+html[data-theme="dark"] .notice{border-color:#9e6a03; background:#2a2008; color:#e3b341}
+.cards{display:grid; gap:12px; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); margin:1.2em 0}
+.card{
+  display:block; padding:13px 15px; border:1px solid var(--border); border-radius:var(--radius);
+  background:var(--bg-elev); box-shadow:var(--shadow); color:var(--fg);
+  transition:border-color .18s var(--ease), box-shadow .22s var(--ease), transform .18s var(--ease);
+}
+.card:hover{
+  border-color:var(--accent); text-decoration:none; transform:translateY(-2px);
+  box-shadow:var(--shadow-md);
+}
+.card:active{transform:translateY(0) scale(.995)}
+.card:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.card .ct{font-weight:700; font-size:15px; line-height:1.45; margin-bottom:4px; transition:color .18s var(--ease)}
+.card:hover .ct{color:var(--accent)}
+.card .cp{font-family:var(--font-mono); font-size:11.5px; color:var(--fg-muted); margin-bottom:6px}
+.card .cs{font-size:13px; color:var(--fg-muted); line-height:1.6}
+.card .cc{font-size:11.5px; color:var(--fg-muted); margin-top:7px}
+
+/* ============ 窄屏遮罩 ============ */
+#scrim{display:none; position:fixed; inset:52px 0 0; background:rgba(0,0,0,.4); z-index:30}
+
+@media (max-width:1240px){
+  :root{--left-w:252px; --right-w:220px}
+}
+@media (max-width:860px){
+  .layout{display:block}
+  .sidebar,.toc{
+    position:fixed; top:52px; bottom:0; height:auto; z-index:35; width:min(88vw,300px);
+    box-shadow:var(--shadow);
+    transition:transform .28s var(--ease), background-color .24s linear;
+    margin-left:0; margin-right:0; opacity:1; visibility:visible;
+  }
+  .sidebar{left:0}
+  .toc{right:0; overflow:visible}
+  .toc>*{width:auto}
+  .toc-list{overflow-y:visible}
+  /* 窄屏下两侧栏都是抽屉：隐藏 = 移出画面（仍保留在 DOM 里以便动画） */
+  body.left-hidden .sidebar,
+  body.right-hidden .toc{opacity:1; visibility:visible; transition:transform .28s var(--ease)}
+  body.left-hidden .sidebar{margin-left:0; width:min(88vw,300px); transform:translateX(-102%)}
+  body.right-hidden .toc{
+    width:min(88vw,300px); border-left-color:var(--border); transform:translateX(102%);
+  }
+  body:not(.left-hidden) .sidebar{transform:none}
+  body:not(.right-hidden) .toc{transform:none}
+  #scrim{display:block; opacity:0; pointer-events:none; transition:opacity .24s var(--ease)}
+  body.side-open #scrim{opacity:1; pointer-events:auto}
+  .article{padding:18px 18px 70px}
+  .topbar .brand .bs{display:none}
+  .topbar .path{display:none}
+  .lbl{display:none}
+  #printBtn,#linkBtn{display:none}
+}
+
+/* ============ 动效 ============ */
+@keyframes riseIn{from{opacity:0; transform:translateY(7px)} to{opacity:1; transform:none}}
+@keyframes cardIn{from{opacity:0; transform:translateY(9px)} to{opacity:1; transform:none}}
+/* backwards（而非 both）：动画结束后交还给自身样式，避免压掉 hover 变换 */
+.article.pop{animation:riseIn .32s var(--ease-out) backwards}
+.cards .card{animation:cardIn .4s var(--ease-out) backwards}
+.cards .card:nth-child(2){animation-delay:.05s}
+.cards .card:nth-child(3){animation-delay:.1s}
+.cards .card:nth-child(4){animation-delay:.15s}
+.cards .card:nth-child(5){animation-delay:.2s}
+.cards .card:nth-child(6){animation-delay:.25s}
+.cards .card:nth-child(n+7){animation-delay:.3s}
+/* 主题切换时让这些块也跟着淡一点（不要碰 .sidebar/.toc/.topbar，它们有自己的过渡表） */
+.intro,.notice,.article pre.code,.table-wrap{
+  transition:background-color .24s linear, border-color .24s linear, color .24s linear;
+}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.001ms !important; animation-iteration-count:1 !important;
+    transition-duration:.001ms !important;
+  }
+}
+
+/* ============ 打印 ============ */
+@media print{
+  :root{--bg:#fff; --bg-soft:#fff; --bg-elev:#fff; --fg:#000; --fg-muted:#444;
+        --border:#bbb; --border-soft:#ddd; --code-bg:#f7f7f7; --quote-bg:#fafafa; --shadow:none}
+  .topbar,.sidebar,.toc,#scrim,.anchor,.meta .no-print,.intro .anchor{display:none !important}
+  .layout{display:block}
+  main{display:block}
+  .article{max-width:none; padding:0}
+  body{font-size:11.5pt; line-height:1.65}
+  .article h1{font-size:19pt} .article h2{font-size:15pt} .article h3{font-size:13pt}
+  .article h1,.article h2,.article h3,.article h4{page-break-after:avoid; break-after:avoid}
+  .article pre.code,.table-wrap,.article table,.article blockquote{page-break-inside:avoid; break-inside:avoid}
+  .article tbody tr:hover{background:none}
+  .table-wrap{overflow:visible !important; border-color:#bbb}
+  .article table{font-size:9.5pt}
+  .article a{color:#000; text-decoration:none}
+  .article a.docref{border-bottom:0}
+  .intro{border:1px solid #bbb; background:none}
+  @page{margin:15mm}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <button class="btn icon" id="toggleLeft" title="显示/隐藏左侧目录栏（快捷键 [ ）" aria-pressed="false" aria-controls="sidebar">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor"/><line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor"/></svg>
+  </button>
+  <div class="brand"><span class="logo" aria-hidden="true"></span><span id="brandTitle">文档浏览器</span> <span class="bs" id="brandSub"></span></div>
+  <div class="grow"><div class="path" id="docPath"></div></div>
+  <button class="btn" id="prevBtn" title="上一篇">‹<span class="lbl"> 上一篇</span></button>
+  <button class="btn" id="nextBtn" title="下一篇"><span class="lbl">下一篇 </span>›</button>
+  <button class="btn" id="printBtn" title="打印 / 导出 PDF">打印</button>
+  <button class="btn" id="linkBtn" title="复制当前文档链接">链接</button>
+  <button class="btn" id="themeBtn" title="切换深/浅色">深色</button>
+  <button class="btn icon" id="toggleRight" title="显示/隐藏右侧目录栏（快捷键 ] ）" aria-pressed="true" aria-controls="tocPane">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor"/><line x1="10" y1="2.5" x2="10" y2="13.5" stroke="currentColor"/></svg>
+  </button>
+</header>
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="pane-h">
+      <span class="pane-t" id="sidebarTitle">文档目录</span>
+      <button class="pane-x" id="closeLeft" title="隐藏左侧目录栏" aria-label="隐藏左侧目录栏">✕</button>
+    </div>
+    <div class="search-wrap" id="searchWrap">
+      <input id="search" type="search" placeholder="搜索文件名 / 全文…  ( / 聚焦 )" autocomplete="off" spellcheck="false">
+    </div>
+    <nav class="tree" id="tree"></nav>
+    <div class="sidebar-foot" id="foot"></div>
+  </aside>
+
+  <main>
+    <article class="article" id="article"></article>
+  </main>
+
+  <aside class="toc" id="tocPane">
+    <div class="pane-h">
+      <span class="pane-t" id="tocTitle">本篇目录</span>
+      <button class="pane-x" id="closeRight" title="隐藏右侧目录栏" aria-label="隐藏右侧目录栏">✕</button>
+    </div>
+    <ul class="toc-list" id="tocList"></ul>
+  </aside>
+</div>
+
+<div id="scrim"></div>
+
+<!-- ==================================================================
+     页面配置（离线模式使用）：对应工程根目录下 config.json 的内容。
+     由 build-docs.mjs 写入，不要手工编辑这里的 JSON —— 请改 config.json。
+     改完在 file:// 下重跑一次构建生效；http 实时模式下刷新页面即可生效。
+     ================================================================== -->
+<script id="viewer-config" type="application/json">{"title":"Markdown 文档浏览器","subtitle":"· markdown-docs-helper","home":{"title":"文档索引","intro":"本页只读展示文档目录下的 Markdown 文件，**绝不修改**任何原始文档。\n\n- **左侧目录栏**：左上角按钮或快捷键 `[` 开关；显示哪些文档由本文件控制\n- **右侧目录栏**：当前文档的标题大纲，右上角按钮或快捷键 `]` 开关\n- 正文里的 `§` 章节引用与行内 `docs/xxx.md` 都能点击跳转；`/` 聚焦搜索，`Ctrl+P` 打印或导出 PDF\n\n想看别的文档目录，用 `node build-docs.mjs --serve \u003c目录>` 指过去即可（本文件里的 `docs/` 前缀不用改）。\n\n要调整标题、首页说明或左栏显示的内容，改本文件（`config.json`）。","showCards":true},"sidebar":{"title":"文档目录","defaultOpen":false,"remember":true,"showSearch":true,"showCounts":true,"folders":[],"exclude":[],"order":[],"docs":{}},"toc":{"title":"本篇目录","defaultOpen":true,"remember":true,"maxDepth":4},"reading":{"maxWidth":920}}</script>
+
+<!-- ==================================================================
+     文档数据快照（离线模式使用）。
+     由 build-docs.mjs 自动写入，请勿手工编辑此行以下的 JSON。
+     通过 http 打开本页时会改为实时读取文档目录下的 .md 文件。
+     ================================================================== -->
+<script id="docs-snapshot" type="application/json">{"generatedAt":"2026-09-19T03:23:42.905Z","docsRoot":"docs/","count":4,"skipped":0,"docs":[{"path":"docs/示例/表格与代码.md","dir":"docs/示例","name":"表格与代码.md","size":2010,"mtime":"2026-09-19T02:49:40.200Z","title":"表格与代码","text":"# 表格与代码\n\n这篇文档专门堆一些\"容易渲染错\"的内容，既是示例也是回归素材。\n\n## 1. 宽表格（横向滚动）\n\n| 字段 | 类型 | 必填 | 默认值 | 说明 |\n| --- | --- | :---: | --- | --- |\n| `title` | string | 否 | `\"Markdown 文档浏览器\"` | 顶栏主标题 |\n| `subtitle` | string | 否 | `\"\"` | 顶栏副标题，窄屏自动隐藏 |\n| `home.title` | string | 否 | `\"文档索引\"` | 首页大标题，设成空串则不显示 |\n| `home.intro` | string | 否 | `\"\"` | 首页引导语，支持 Markdown |\n| `sidebar.folders` | array | 否 | `[]` | 只显示列出的目录；空数组表示全部 |\n| `toc.maxDepth` | number | 否 | `4` | 右栏收录到几级标题 |\n| `reading.maxWidth` | number | 否 | `920` | 正文最大宽度（像素） |\n\n## 2. 空单元格与转义\n\n| 列 A | 列 B | 列 C |\n| --- | --- | --- |\n|  | 只有 B 有值 |  |\n| 含竖线 \\| 的单元格 | 普通文本 | 结尾空格 |\n| **粗** 与 *斜* 混排 | [链接](https://example.com) | `a|b` |\n\n## 3. 代码块里的陷阱\n\n围栏里的一切都按原样输出，不解析标题和强调：\n\n```\n# 这不是标题\n**这不是粗体**\n| 这不是 | 表格 |\n```\n\n缩进代码块里的目录树：\n\n    .\n    ├── docs/\n    │   ├── 指南/\n    │   └── 示例/\n    ├── test/\n    └── build-docs.mjs\n\n行内代码里出现管道符与反引号：`` `a|b` `` 、 `` `code` ``。\n\n## 4. 嵌套结构\n\n1. 顶层有序项\n   - 里面套无序\n   - 再来一条\n     1. 再套有序\n     2. 连着一条\n2. 第二项\n\n> 引用里放列表：\n>\n> - 第一条\n> - 第二条\n>\n> 以及代码：\n>\n> ```jsonc\n> { \"maxDepth\": 4 }   // 允许注释与尾随逗号\n> ```\n\n## 5. 长段落与中文折行\n\n中文软换行不会插入多余空格：\n这一行和\n这一行在渲染后应当连成一句，中间没有空格。\n\n英文则按空格折行：this is a long paragraph that should wrap at spaces and keep\nits single spaces intact after soft line breaks.\n"},{"path":"docs/示例/Markdown 语法示例.md","dir":"docs/示例","name":"Markdown 语法示例.md","size":1909,"mtime":"2026-09-19T02:48:49.538Z","title":"Markdown 语法示例","text":"# Markdown 语法示例\n\n这篇文档覆盖渲染器支持的全部语法，可以直接当\"样子\"看。**不支持原始 HTML**（会被转义成文本），这是为了安全。\n\n## 1. 行内格式\n\n普通文本、**粗体**、*斜体*、***粗斜体***、~~删除线~~、`行内代码`、[外部链接](https://example.com)。\n\n转义写法：\\*不是斜体\\*、\\`不是代码\\`。\n\n## 2. 标题层级\n\n### 2.1 三级标题\n\n#### 2.1.1 四级标题\n\n##### 五级标题（右栏默认只收录到四级）\n\n## 3. 列表\n\n无序列表：\n\n- 第一项\n- 第二项\n  - 嵌套项\n  - 另一个嵌套项\n- 第三项\n\n有序列表：\n\n1. 第一步\n2. 第二步\n   1. 子步骤\n   2. 另一个子步骤\n3. 第三步\n\n任务列表：\n\n- [x] 已经做完的事\n- [ ] 还没做的事\n\n## 4. 引用与分隔线\n\n> 引用块可以换行，\n> 也可以包含 **格式** 与 `代码`。\n>\n> > 还能嵌套引用。\n\n---\n\n## 5. 代码\n\n行内代码：`docs/指南/快速开始.md`（这个会变成可点击的跨文档链接）。\n\n围栏代码块（带语言标记）：\n\n```js\nexport function greet(name) {\n  return `你好，${name}`;\n}\n```\n\n缩进代码块（四个空格）：\n\n    markdown-docs-helper/\n    ├─ md-viewer.html\n    └─ build-docs.mjs\n\n## 6. 章节引用\n\n正文里写 §2.1 或 §5 会自动变成跳转链接 —— 前提是文档里存在对应编号的标题。\n上面的 `## 2. 标题层级` 与 `### 2.1 三级标题` 因此都能被引用。\n\n## 7. 表格\n\n| 左对齐 | 居中 | 右对齐 |\n| :--- | :---: | ---: |\n| a | b | c |\n| 较长的单元格内容 | 短 | 123 |\n| 含 \\| 转义的竖线 | `code` | **粗体** |\n\n## 8. 图片与链接\n\n图片按相对路径解析（示例里没有真实图片文件，所以不展示）：\n\n```markdown\n![示意图](../assets/demo.png)\n```\n\n引用其它文档用相对路径或 `docs/` 前缀都行，例如 `docs/示例/表格与代码.md`。\n"},{"path":"docs/指南/界面与快捷键.md","dir":"docs/指南","name":"界面与快捷键.md","size":1656,"mtime":"2026-09-19T02:48:42.548Z","title":"界面与快捷键","text":"# 界面与快捷键\n\n## 三栏布局\n\n- **左侧目录栏**：全部文档，可搜索、可分组；显示哪些文档由 `config.json` 决定\n- **中间正文**：Markdown 渲染结果，表格可横向滚动，代码块带边框\n- **右侧目录栏**：当前文档的标题大纲，滚动时自动高亮所在章节\n\n两侧栏都可以独立隐藏，并且记住上次的开关状态。\n\n## 快捷键\n\n| 按键 | 作用 |\n| --- | --- |\n| `[` | 开关左侧目录栏 |\n| `]` | 开关右侧目录栏 |\n| `/` | 聚焦搜索框 |\n| `Esc` | 清空搜索并失焦 |\n| `Ctrl` + `P` | 打印 / 导出 PDF |\n\n## 鼠标操作\n\n| 操作 | 位置 |\n| --- | --- |\n| 打开文档 | 左栏条目、首页卡片 |\n| 跳转章节 | 右栏目录条目、正文里的 `§1.2` 引用 |\n| 跨文档跳转 | 正文里 `` `docs/指南/快速开始.md` `` 形式的行内代码 |\n| 复制当前链接 | 工具栏「链接」按钮 |\n| 切换深浅色 | 工具栏「深色 / 浅色」按钮 |\n\n## 窄屏行为\n\n窗口宽度小于 860px 时，两侧栏变成抽屉：默认都收起，点工具栏按钮滑出，\n点空白遮罩或右上角 `✕` 收起。顶栏会隐藏副标题与路径以节省空间。\n\n## 侧栏开关的实现要点\n\n侧栏收起用的是「左栏负外边距滑出、右栏收窄裁剪」两套做法，都是为了在**不重排正文**的前提下把空间收干净：\n\n- 左栏：`margin-left: calc(-1 * var(--left-w))`，左向溢出不会产生横向滚动条；\n- 右栏：`width` 收窄到 0 并自己裁剪，内层保持原宽，视觉上同样向右滑出。\n\n动画首帧用 `html.preload` 关掉过渡，避免加载时侧栏\"滑一下\"。\n"},{"path":"docs/指南/快速开始.md","dir":"docs/指南","name":"快速开始.md","size":1939,"mtime":"2026-09-19T03:23:18.072Z","title":"快速开始","text":"# 快速开始\n\n这是一个**示例文档**，用来验证工具本身能正常工作。把这里的文件换成你自己的 Markdown 就行 —— 工具只读取、不修改。\n\n## 1. 三种打开方式\n\n| 方式 | 命令 | 适用场景 |\n| --- | --- | --- |\n| 双击打开 | 双击 `md-viewer.html` | 日常阅读，可离线，零依赖 |\n| 实时模式 | `node build-docs.mjs --serve` | 边写边看，改完刷新即可 |\n| 只看别的目录 | `node build-docs.mjs --serve \u003c目录>` | 不想把文档搬进本工程 |\n\n双击模式读取页面里内置的数据副本，所以文档有变动后要跑一次 `node build-docs.mjs`；\n实时模式每次都重新扫描目录，新增文档刷新页面就会出现。\n\n## 2. 目录与本工具的关系\n\n```\nmarkdown-docs-helper/\n├─ md-viewer.html      ← 双击这个\n├─ build-docs.mjs      ← 构建 / 本地服务\n├─ config.json         ← 你主要改这个\n├─ docs/               ← 默认被浏览的文档（可以整个换掉）\n└─ test/               ← 回归与调试脚本\n```\n\n`docs/` 只是默认值。把目录写在命令后面（位置参数）就能指向任何目录，页面里的路径前缀仍然是 `docs/`，\n所以 `config.json` 里的 `folders` / `exclude` / `docs` 都不用跟着改。\n目录最多写一个；写错了（未知参数、不存在的目录…）脚本会直接报错，不会拿默认目录凑合。\n\n## 3. 只读保证\n\n- 构建脚本只读文档目录，写入被限制在工程内，且**明确禁止写进文档目录**；\n- 页面本身没有任何写文件的能力，搜索、过滤、隐藏文档都只作用于显示层。\n\n> 换句话说：放心把这个工具指向你正在写的文档目录，它不会动你的文件。\n\n## 4. 下一步\n\n- 界面元素与快捷键见 `docs/指南/界面与快捷键.md`\n- 想调整标题、首页说明、左栏显示范围，见工程根的 `README.md` 配置章节\n"}]}</script>
+
+<script id="md-core">
+/* =====================================================================
+   md-core：纯函数 Markdown 渲染器（不依赖 DOM，可在 Node 中单独测试）
+   支持：ATX 标题、段落、围栏代码块、缩进代码块、引用、有序/无序列表
+        （含嵌套与任务列表）、GFM 表格（含对齐）、水平线、
+        行内 code/粗体/斜体/删除线/链接/图片/自动链接。
+   不解析原始 HTML（按纯文本转义输出），避免文档注入脚本。
+   ===================================================================== */
+var MarkdownCore = (function () {
+  'use strict';
+
+  var RE_ATX = /^ {0,3}(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$/;
+  var RE_FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/;
+  var RE_HR = /^ {0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$/;
+  var RE_LIST = /^( {0,3})([-*+]|\d{1,9}[.)])([ \t]+)(.*)$/;
+  var RE_BQ = /^ {0,3}>/;
+  var RE_INDENT = /^ {4}/;
+  var RE_DELIM_CELL = /^:?-+:?$/;
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function attr(s) {
+    return esc(s).replace(/"/g, '&quot;');
+  }
+  /* 去掉行内标记，用于生成 slug / 提取标题编号 */
+  function plain(s) {
+    return String(s)
+      .replace(/`([^`]*)`/g, '$1')
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\*\*|__|~~|\*|_/g, '')
+      .trim();
+  }
+  function slugify(s, used) {
+    var base = plain(s).toLowerCase()
+      .replace(/[\s\u3000]+/g, '-')
+      .replace(/[^\p{L}\p{N}\-_]/gu, '')
+      .replace(/-{2,}/g, '-')
+      .replace(/^-+|-+$/g, '');
+    if (!base) base = 'section';
+    var id = base, n = 1;
+    while (used && used[id]) { id = base + '-' + (n++); }
+    if (used) used[id] = true;
+    return id;
+  }
+  /* 标题前的编号，如 "5.3 内部需…" -> "5.3"，用于 §引用跳转 */
+  function headingNumber(text) {
+    var m = /^\s*(\d+(?:\.\d+)*)/.exec(plain(text));
+    return m ? m[1] : null;
+  }
+  var RE_CJK = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f]/;
+
+  /* 扫描标题（跳过代码围栏），标题 id 与正文渲染时使用的 id 完全一致 */
+  function scanHeadings(md) {
+    var lines = String(md).replace(/\r\n?/g, '\n').split('\n');
+    var out = [], used = {}, fence = null;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var fm = RE_FENCE.exec(line);
+      if (fm) {
+        if (!fence) { fence = fm[1].charAt(0).repeat(fm[1].length); continue; }
+        if (fm[1].charAt(0) === fence.charAt(0) && fm[1].length >= fence.length) { fence = null; continue; }
+      }
+      if (fence) continue;
+      var m = RE_ATX.exec(line);
+      if (!m) continue;
+      out.push({
+        level: m[1].length,
+        text: m[2],
+        id: slugify(m[2], used),
+        num: headingNumber(m[2])
+      });
+    }
+    return out;
+  }
+
+  /* ---------- 行内渲染 ---------- */
+  function inline(src, ctx, depth) {
+    depth = depth || 0;
+    var stash = [];
+    function put(html) { stash.push(html); return '\u0000' + (stash.length - 1) + '\u0000'; }
+
+    var s = esc(src);
+
+    // 反斜杠转义
+    s = s.replace(/\\([\\`*_{}\[\]()#+\-.!~|>])/g, function (m, c) { return put(c); });
+
+    // 行内代码（可点击的跨文档引用在这里识别）
+    s = s.replace(/(`+)([\s\S]*?)\1/g, function (m, tick, code) {
+      code = code.replace(/\n/g, ' ');
+      if (/^ .* $/.test(code) && code.trim()) code = code.slice(1, -1);
+      var ref = ctx && ctx.resolveDoc ? ctx.resolveDoc(code.trim()) : null;
+      if (ref) {
+        return put('<a class="docref" href="' + attr(ctx.docHref(ref.path, ref.section)) +
+          '" title="打开 ' + attr(ref.path) + '"><code>' + code + '</code></a>');
+      }
+      return put('<code>' + code + '</code>');
+    });
+
+    // §章节引用
+    if (ctx && ctx.sectionMap) {
+      s = s.replace(/§[ \t]?(\d+(?:\.\d+)*)/g, function (m, num) {
+        var id = ctx.sectionMap[num];
+        if (!id) return m;
+        return put('<a class="secref" href="' + attr(ctx.docHref(ctx.docPath, id)) +
+          '" title="跳转到 ' + attr(num) + '">' + m + '</a>');
+      });
+    }
+
+    // 图片
+    s = s.replace(/!\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)/g, function (m, alt, src2) {
+      return put('<img src="' + attr(ctx && ctx.resolveAsset ? ctx.resolveAsset(src2) : src2) +
+        '" alt="' + attr(alt) + '" loading="lazy">');
+    });
+
+    // 链接
+    s = s.replace(/\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)/g, function (m, text, href) {
+      var label = depth < 3 ? inline(text, ctx, depth + 1) : esc(text);
+      if (/^#/.test(href)) {
+        var sec = decodeURIComponent(href.slice(1));
+        return put('<a href="' + attr(ctx.docHref(ctx.docPath, sec)) + '">' + label + '</a>');
+      }
+      var ref = ctx && ctx.resolveDoc ? ctx.resolveDoc(href) : null;
+      if (ref) {
+        return put('<a class="docref" href="' + attr(ctx.docHref(ref.path, ref.section)) + '">' + label + '</a>');
+      }
+      if (/^(https?:|mailto:)/i.test(href)) {
+        return put('<a href="' + attr(href) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>');
+      }
+      return put('<a href="' + attr(ctx && ctx.resolveAsset ? ctx.resolveAsset(href) : href) + '">' + label + '</a>');
+    });
+
+    // 自动链接
+    s = s.replace(/(^|[\s(（])((?:https?:\/\/|mailto:)[^\s<>()（）]+)/g, function (m, pre, url) {
+      return pre + put('<a href="' + attr(url) + '" target="_blank" rel="noopener noreferrer">' + url + '</a>');
+    });
+    s = s.replace(/&lt;((?:https?:\/\/|mailto:)[^\s&]+)&gt;/g, function (m, url) {
+      return put('<a href="' + attr(url) + '" target="_blank" rel="noopener noreferrer">' + url + '</a>');
+    });
+
+    // 强调：先强后弱，避免 ** 被拆开
+    s = s.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[^\w])__(?=\S)([\s\S]*?\S)__(?=$|[^\w])/g, '$1<strong>$2</strong>');
+    s = s.replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>');
+    s = s.replace(/\*(?=\S)([^*\n]*?\S)\*/g, '<em>$1</em>');
+    s = s.replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?=$|[^\w])/g, '$1<em>$2</em>');
+
+    // 硬换行（行尾两个空格）优先于软换行折叠
+    s = s.replace(/ {2,}\n/g, '<br>\n');
+    s = s.replace(/\n/g, ' ');
+
+    return s.replace(/\u0000(\d+)\u0000/g, function (m, i) { return stash[+i]; });
+  }
+
+  /* 中文软换行折叠：两侧都是中日韩字符时不插空格，其余情况按英文习惯插空格 */
+  function softJoin(buf) {
+    var out = '';
+    for (var i = 0; i < buf.length; i++) {
+      var piece = buf[i].trim();
+      if (!piece) continue;
+      if (!out) { out = piece; continue; }
+      var a = out.charAt(out.length - 1), b = piece.charAt(0);
+      out += (RE_CJK.test(a) && RE_CJK.test(b)) ? piece : ' ' + piece;
+    }
+    return out;
+  }
+
+  function isDelimRow(line) {
+    var t = line.trim();
+    if (!t || !/\|/.test(t) && !/^:?-+:?$/.test(t)) return false;
+    if (!/^[|\s:-]+$/.test(t) || !/-/.test(t)) return false;
+    var cells = splitRow(t);
+    if (!cells.length) return false;
+    for (var i = 0; i < cells.length; i++) {
+      if (!RE_DELIM_CELL.test(cells[i].trim())) return false;
+    }
+    return true;
+  }
+  /* 按未转义、且不在行内代码中的 | 拆分表格行 */
+  function splitRow(line) {
+    var t = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+    var cells = [], cur = '', tick = false;
+    for (var i = 0; i < t.length; i++) {
+      var c = t.charAt(i);
+      if (c === '\\' && t.charAt(i + 1) === '|') { cur += '|'; i++; continue; }
+      if (c === '`') { tick = !tick; cur += c; continue; }
+      if (c === '|' && !tick) { cells.push(cur); cur = ''; continue; }
+      cur += c;
+    }
+    cells.push(cur);
+    return cells;
+  }
+  function alignOf(cell) {
+    var t = cell.trim();
+    var l = t.charAt(0) === ':', r = t.charAt(t.length - 1) === ':';
+    return l && r ? 'center' : r ? 'right' : l ? 'left' : '';
+  }
+
+  function startsBlock(line, allowIndent) {
+    var t = line.replace(/^ {0,3}/, '');
+    if (allowIndent !== false && RE_INDENT.test(line)) return true;
+    return RE_FENCE.test(line) || RE_ATX.test(line) || RE_BQ.test(line) ||
+      RE_LIST.test(line) || RE_HR.test(t);
+  }
+
+  /* ---------- 列表 ---------- */
+  function parseList(lines, start, ctx) {
+    var first = RE_LIST.exec(lines[start]);
+    var ordered = /\d/.test(first[2]);
+    var num = ordered ? parseInt(first[2], 10) : 1;
+    var markerIndent = first[1].length;
+    var items = [], i = start, loose = false;
+
+    while (i < lines.length) {
+      var m = RE_LIST.exec(lines[i]);
+      if (!m || m[1].length !== markerIndent || /\d/.test(m[2]) !== ordered) break;
+      var contentIndent = m[1].length + m[2].length + m[3].length;
+      var item = [m[4]];
+      i++;
+      while (i < lines.length) {
+        var c = lines[i];
+        if (!c.trim()) {
+          // 空行：若其后仍属于本条目，则记为松列表
+          var j = i;
+          while (j < lines.length && !lines[j].trim()) j++;
+          if (j < lines.length) {
+            var ind2 = leadingSpaces(lines[j]);
+            var sib = RE_LIST.test(lines[j]) && ind2 <= markerIndent;
+            if (!sib && (ind2 >= contentIndent || ind2 > markerIndent)) {
+              item.push(''); loose = true; i++; continue;
+            }
+          }
+          break;
+        }
+        var ind = leadingSpaces(c);
+        if (RE_LIST.test(c) && ind <= markerIndent) break;   // 同级或外层条目
+        if (ind >= contentIndent) { item.push(c.slice(contentIndent)); i++; continue; }
+        if (ind > markerIndent) { item.push(c.slice(ind)); i++; continue; }
+        item.push(c.trim()); i++;                             // 懒续行
+      }
+      items.push(item);
+      // 条目之间有空行 -> 松列表
+      var k = i;
+      while (k < lines.length && !lines[k].trim()) k++;
+      if (k > i && k < lines.length && RE_LIST.test(lines[k]) && leadingSpaces(lines[k]) === markerIndent) loose = true;
+    }
+
+    var tag = ordered ? 'ol' : 'ul';
+    var open = '<' + tag + (ordered && num !== 1 ? ' start="' + num + '"' : '') + (loose ? ' class="loose"' : '') + '>';
+    var html = open;
+    for (var n = 0; n < items.length; n++) {
+      var it = items[n].slice();
+      var task = null;
+      var tm = /^\[([ xX])\][ \t]+([\s\S]*)$/.exec(it[0] || '');
+      if (tm) { task = tm[1].toLowerCase() === 'x'; it[0] = tm[2]; }
+      var rest = it.slice(1);
+      var needsBlocks = loose || rest.some(function (l) { return !l.trim() || startsBlock(l); });
+      var body = needsBlocks ? blocks(it, ctx) : inline(softJoin(it), ctx);
+      var box = task === null ? '' : '<input type="checkbox" disabled' + (task ? ' checked' : '') + '> ';
+      html += '<li>' + box + body.trim() + '</li>';
+    }
+    return { html: html + '</' + tag + '>', next: i };
+  }
+  function leadingSpaces(s) { var m = /^( *)/.exec(s); return m[1].length; }
+
+  /* ---------- 块级渲染 ---------- */
+  function blocks(lines, ctx) {
+    var out = '', i = 0;
+    while (i < lines.length) {
+      var line = lines[i];
+      if (!line.trim()) { i++; continue; }
+
+      // 围栏代码块
+      var fm = RE_FENCE.exec(line);
+      if (fm) {
+        var ch = fm[1].charAt(0), len = fm[1].length, buf = [];
+        i++;
+        while (i < lines.length) {
+          var cm = RE_FENCE.exec(lines[i]);
+          if (cm && cm[1].charAt(0) === ch && cm[1].length >= len && !cm[2].trim()) { i++; break; }
+          buf.push(lines[i]); i++;
+        }
+        while (buf.length && !buf[buf.length - 1].trim()) buf.pop();
+        var info = fm[2].trim();
+        var cls = /^[\w+#.-]+$/.test(info) ? ' class="language-' + attr(info.toLowerCase()) + '"' : '';
+        out += '<pre class="code"><code' + cls + '>' + esc(buf.join('\n')) + '\n</code></pre>';
+        continue;
+      }
+
+      // 缩进代码块（4 空格）
+      if (RE_INDENT.test(line)) {
+        var cbuf = [];
+        while (i < lines.length && (RE_INDENT.test(lines[i]) || !lines[i].trim())) {
+          if (!lines[i].trim()) {
+            // 代码块内的空行：仅当后面还有缩进行时保留
+            var j = i;
+            while (j < lines.length && !lines[j].trim()) j++;
+            if (j < lines.length && RE_INDENT.test(lines[j])) { cbuf.push(''); i++; continue; }
+            break;
+          }
+          cbuf.push(lines[i].slice(4)); i++;
+        }
+        out += '<pre class="code"><code>' + esc(cbuf.join('\n')) + '\n</code></pre>';
+        continue;
+      }
+
+      // 水平线
+      if (RE_HR.test(line)) { out += '<hr>'; i++; continue; }
+
+      // 标题
+      var hm = RE_ATX.exec(line);
+      if (hm) {
+        var lvl = hm[1].length;
+        var h = ctx.headings[ctx.hIndex];
+        var id;
+        if (h && plain(h.text) === plain(hm[2])) { id = h.id; ctx.hIndex++; }
+        else { id = slugify(hm[2], ctx.usedSlugs); }
+        out += '<h' + lvl + ' id="' + attr(id) + '">' +
+          '<a class="anchor" href="' + attr(ctx.docHref(ctx.docPath, id)) + '" aria-hidden="true">#</a>' +
+          inline(hm[2], ctx) + '</h' + lvl + '>';
+        i++;
+        continue;
+      }
+
+      // 引用
+      if (RE_BQ.test(line)) {
+        var qbuf = [];
+        while (i < lines.length) {
+          if (RE_BQ.test(lines[i])) { qbuf.push(lines[i].replace(/^ {0,3}>[ \t]?/, '')); i++; continue; }
+          if (lines[i].trim() && !startsBlock(lines[i])) { qbuf.push(lines[i]); i++; continue; }
+          break;
+        }
+        out += '<blockquote>' + blocks(qbuf, ctx) + '</blockquote>';
+        continue;
+      }
+
+      // 表格
+      if (line.indexOf('|') >= 0 && i + 1 < lines.length && isDelimRow(lines[i + 1])) {
+        var head = splitRow(line), delims = splitRow(lines[i + 1]);
+        var aligns = delims.map(alignOf);
+        i += 2;
+        var body = [];
+        while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') >= 0 &&
+               !startsBlock(lines[i], false) && !isDelimRow(lines[i])) {
+          body.push(splitRow(lines[i])); i++;
+        }
+        var th = '<tr>';
+        for (var c1 = 0; c1 < head.length; c1++) {
+          th += '<th' + (aligns[c1] ? ' style="text-align:' + aligns[c1] + '"' : '') + '>' +
+            inline(head[c1].trim(), ctx) + '</th>';
+        }
+        th += '</tr>';
+        var tb = '';
+        for (var r = 0; r < body.length; r++) {
+          tb += '<tr>';
+          for (var c2 = 0; c2 < head.length; c2++) {
+            tb += '<td' + (aligns[c2] ? ' style="text-align:' + aligns[c2] + '"' : '') + '>' +
+              inline((body[r][c2] || '').trim(), ctx) + '</td>';
+          }
+          tb += '</tr>';
+        }
+        out += '<div class="table-wrap"><table><thead>' + th + '</thead>' +
+          (tb ? '<tbody>' + tb + '</tbody>' : '') + '</table></div>';
+        continue;
+      }
+
+      // 列表
+      if (RE_LIST.test(line)) {
+        var res = parseList(lines, i, ctx);
+        out += res.html; i = res.next;
+        continue;
+      }
+
+      // 段落
+      var pbuf = [line]; i++;
+      while (i < lines.length && lines[i].trim() && !startsBlock(lines[i], false)) { pbuf.push(lines[i]); i++; }
+      out += '<p>' + inline(softJoin(pbuf), ctx) + '</p>';
+    }
+    return out;
+  }
+
+  function render(md, ctx) {
+    ctx = Object.assign({ usedSlugs: {}, hIndex: 0 }, ctx || {});
+    ctx.headings = scanHeadings(md);
+    ctx.sectionMap = {};
+    for (var i = 0; i < ctx.headings.length; i++) {
+      var h = ctx.headings[i];
+      if (h.num && !(h.num in ctx.sectionMap)) ctx.sectionMap[h.num] = h.id;
+    }
+    var html = blocks(String(md).replace(/\r\n?/g, '\n').replace(/\t/g, '    ').split('\n'), ctx);
+    return { html: html, headings: ctx.headings };
+  }
+
+  return {
+    render: render,
+    scanHeadings: scanHeadings,
+    plain: plain,
+    slugify: slugify,
+    inline: inline
+  };
+})();
+if (typeof module !== 'undefined' && module.exports) module.exports = MarkdownCore;
+</script>
+
+<script id="md-app">
+/* ===================== 页面应用逻辑 ===================== */
+(function () {
+  'use strict';
+  var Core = MarkdownCore;
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function enc(s) { return encodeURIComponent(s); }
+  function dirOf(p) { var i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); }
+  function baseOf(p) { var i = p.lastIndexOf('/'); return i < 0 ? p : p.slice(i + 1); }
+  function normDir(p) { return String(p).replace(/\/+$/, ''); }
+  function byPathZh(a, b) { return a.path.localeCompare(b.path, 'zh-Hans-CN'); }
+  var NARROW = 860;
+
+  /* ---------- 默认配置：config.json 缺失或缺字段时用它兜底 ---------- */
+  var DEFAULTS = {
+    title: 'Markdown 文档浏览器',
+    subtitle: '',
+    home: { title: '文档索引', intro: '', showCards: true },
+    sidebar: {
+      title: '文档目录', defaultOpen: false, remember: true, showSearch: true,
+      showCounts: true, folders: [], exclude: [], order: [], docs: {}
+    },
+    toc: { title: '本篇目录', defaultOpen: true, remember: true, maxDepth: 4 },
+    reading: { maxWidth: 920 }
+  };
+
+  var state = {
+    docs: [], visible: [], byPath: {}, byBase: {},
+    cfg: DEFAULTS, cfgError: null, cfgFileLoaded: false,
+    mode: 'snapshot', generatedAt: null, skipped: 0,
+    current: null, headings: [],
+    leftOpen: false, rightOpen: true
+  };
+
+  /* ---------- JSONC：允许注释与尾随逗号，方便手写 config.json ---------- */
+  function parseJsonc(text) {
+    text = String(text).replace(/^\uFEFF/, '');
+    var out = '', i = 0, inStr = false;
+    while (i < text.length) {
+      var c = text.charAt(i), n = text.charAt(i + 1);
+      if (inStr) {
+        out += c;
+        if (c === '\\') { out += (n === undefined ? '' : n); i += 2; continue; }
+        if (c === '"') inStr = false;
+        i++; continue;
+      }
+      if (c === '"') { inStr = true; out += c; i++; continue; }
+      if (c === '/' && n === '/') { while (i < text.length && text.charAt(i) !== '\n') i++; continue; }
+      if (c === '/' && n === '*') {
+        i += 2;
+        while (i < text.length && !(text.charAt(i) === '*' && text.charAt(i + 1) === '/')) i++;
+        i += 2; continue;
+      }
+      if (c === ',') {                       // 尾随逗号
+        var j = i + 1;
+        while (j < text.length && /\s/.test(text.charAt(j))) j++;
+        if (text.charAt(j) === '}' || text.charAt(j) === ']') { i++; continue; }
+      }
+      out += c; i++;
+    }
+    return JSON.parse(out);
+  }
+  function deepMerge(base, over) {
+    if (over === undefined || over === null) return base;
+    if (typeof over !== 'object' || Array.isArray(over)) return over;
+    var out = {}, k;
+    for (k in base) if (Object.prototype.hasOwnProperty.call(base, k)) out[k] = base[k];
+    for (k in over) {
+      if (!Object.prototype.hasOwnProperty.call(over, k)) continue;
+      var b = base[k], o = over[k];
+      out[k] = (b && o && typeof b === 'object' && !Array.isArray(b) && !Array.isArray(o))
+        ? deepMerge(b, o) : o;
+    }
+    return out;
+  }
+
+  /* ---------- 主题 ---------- */
+  function applyTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    $('themeBtn').textContent = t === 'dark' ? '浅色' : '深色';
+    try { localStorage.setItem('mdv-theme', t); } catch (e) {}
+  }
+  (function initTheme() {
+    var t = null;
+    try { t = localStorage.getItem('mdv-theme'); } catch (e) {}
+    if (!t) t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    applyTheme(t);
+  })();
+
+  /* ---------- 路径工具 ---------- */
+  function docHref(path, section) {
+    return '#p=' + enc(path) + (section ? '&h=' + enc(section) : '');
+  }
+  function parseHash() {
+    var h = location.hash.replace(/^#/, ''), out = {};
+    if (!h) return out;
+    h.split('&').forEach(function (kv) {
+      var i = kv.indexOf('=');
+      if (i < 0) return;
+      try { out[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); }
+      catch (e) { out[kv.slice(0, i)] = kv.slice(i + 1); }
+    });
+    return out;
+  }
+  function resolveAsset(p) {
+    if (/^(https?:|mailto:|data:|#|\/)/i.test(p)) return p;
+    var cur = state.current;
+    var joined = (cur && dirOf(cur.path) ? dirOf(cur.path) + '/' : '') + p;
+    var parts = [];
+    joined.split('/').forEach(function (seg) {
+      if (seg === '.' || seg === '') return;
+      if (seg === '..') { parts.pop(); return; }
+      parts.push(seg);
+    });
+    return parts.join('/');
+  }
+  function resolveDoc(ref) {
+    if (!ref) return null;
+    var section = null, hash = ref.indexOf('#');
+    if (hash >= 0) { section = ref.slice(hash + 1); ref = ref.slice(0, hash); }
+    ref = ref.trim().replace(/^\.\//, '').replace(/^\/+/, '');
+    if (!/\.md$/i.test(ref)) return null;
+    if (state.byPath[ref]) return { path: ref, section: section };
+    var b = baseOf(ref);
+    if (state.byBase[b]) return { path: state.byBase[b].path, section: section };
+    return null;
+  }
+  function ctxFor(docPath) {
+    return {
+      docPath: docPath || '',
+      docHref: docHref,
+      resolveDoc: resolveDoc,
+      resolveAsset: resolveAsset,
+      headings: [],
+      sectionMap: {}
+    };
+  }
+
+  /* ---------- 配置载入：http 下实时读 config.json，file:// 下用内置副本 ---------- */
+  function readEmbeddedConfig() {
+    var el = $('viewer-config');
+    if (!el) return null;
+    try { return parseJsonc(el.textContent); } catch (e) { return null; }
+  }
+  async function loadConfig() {
+    var cfg = null, err = null;
+    if (/^https?:/.test(location.protocol)) {
+      try {
+        var res = await fetch('config.json', { cache: 'no-store' });
+        if (res.ok) {
+          var text = await res.text();
+          try { cfg = parseJsonc(text); state.cfgFileLoaded = true; }
+          catch (e) { err = 'config.json 解析失败：' + e.message; }
+        }
+      } catch (e) { /* 回退内置副本 */ }
+    }
+    if (!cfg) cfg = readEmbeddedConfig();
+    state.cfg = deepMerge(DEFAULTS, cfg || {});
+    state.cfgError = err;
+  }
+  function applyConfig() {
+    var c = state.cfg;
+    document.documentElement.style.setProperty('--content-w', (Number(c.reading && c.reading.maxWidth) || 920) + 'px');
+    $('brandTitle').textContent = c.title || '';
+    $('brandSub').textContent = c.subtitle || '';
+    $('sidebarTitle').textContent = c.sidebar.title || '';
+    $('tocTitle').textContent = c.toc.title || '';
+    $('searchWrap').style.display = c.sidebar.showSearch === false ? 'none' : '';
+    document.title = (c.title || '文档') + (c.subtitle ? ' ' + c.subtitle : '');
+  }
+
+  /* ---------- 侧栏开关（默认值来自 config，可记住上次状态） ---------- */
+  function saveLayout() {
+    try {
+      localStorage.setItem('mdv-panes', JSON.stringify({ left: state.leftOpen, right: state.rightOpen }));
+    } catch (e) {}
+  }
+  function loadLayout() {
+    var c = state.cfg;
+    state.leftOpen = c.sidebar.defaultOpen === true;
+    state.rightOpen = c.toc.defaultOpen !== false;
+    try {
+      var raw = localStorage.getItem('mdv-panes');
+      if (raw) {
+        var s = JSON.parse(raw);
+        if (c.sidebar.remember !== false && typeof s.left === 'boolean') state.leftOpen = s.left;
+        if (c.toc.remember !== false && typeof s.right === 'boolean') state.rightOpen = s.right;
+      }
+    } catch (e) {}
+    // 窄屏下侧栏是抽屉，默认都收起，避免一打开就盖住正文
+    if (window.innerWidth < NARROW) { state.leftOpen = false; state.rightOpen = false; }
+    syncLayout();
+  }
+  function syncLayout() {
+    document.body.classList.toggle('left-hidden', !state.leftOpen);
+    document.body.classList.toggle('right-hidden', !state.rightOpen);
+    document.body.classList.toggle('side-open', state.leftOpen || state.rightOpen);
+    $('toggleLeft').setAttribute('aria-pressed', String(state.leftOpen));
+    $('toggleRight').setAttribute('aria-pressed', String(state.rightOpen));
+  }
+  function setPane(which, open) {
+    if (which === 'left') state.leftOpen = open; else state.rightOpen = open;
+    syncLayout(); saveLayout();
+  }
+  function togglePane(which) {
+    setPane(which, which === 'left' ? !state.leftOpen : !state.rightOpen);
+  }
+
+  /* ---------- 动效 ---------- */
+  function popArticle() {                 // 换文档时正文淡入上浮
+    var el = $('article');
+    el.classList.remove('pop');
+    void el.offsetWidth;                  // 强制回流，让动画可以重新触发
+    el.classList.add('pop');
+  }
+  function enableMotion() {               // 首屏布局落定后再开动效，避免加载时侧栏“滑一下”
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { document.documentElement.classList.remove('preload'); });
+    });
+  }
+
+  /* ---------- 文档载入 ---------- */
+  function readSnapshot() {
+    try { return JSON.parse($('docs-snapshot').textContent); }
+    catch (e) { return { generatedAt: null, docs: [] }; }
+  }
+  function indexDocs(list) {
+    state.byPath = {}; state.byBase = {};
+    list.forEach(function (d) {
+      state.byPath[d.path] = d;
+      var b = baseOf(d.path);
+      if (!state.byBase[b]) state.byBase[b] = d;
+    });
+  }
+  async function loadDocs() {
+    var snap = readSnapshot();
+    state.skipped = snap.skipped || 0;
+    if (/^https?:/.test(location.protocol)) {
+      try {
+        var res = await fetch('docs-index.json', { cache: 'no-store' });
+        if (res.ok) {
+          var idx = await res.json();
+          var docs = await Promise.all((idx.docs || []).map(async function (meta) {
+            try {
+              var r = await fetch(meta.path, { cache: 'no-store' });
+              if (!r.ok) return null;
+              return Object.assign({}, meta, { text: await r.text() });
+            } catch (e) { return null; }
+          }));
+          docs = docs.filter(Boolean);
+          if (docs.length) {
+            state.mode = 'live';
+            state.generatedAt = idx.generatedAt;
+            state.skipped = idx.skipped || 0;
+            return docs;
+          }
+        }
+      } catch (e) { /* 回退快照 */ }
+    }
+    state.mode = 'snapshot';
+    state.generatedAt = snap.generatedAt;
+    return (snap.docs || []).slice();
+  }
+
+  /* ---------- 按 config 决定左栏显示哪些文档 ---------- */
+  function applyDocFilter() {
+    var c = state.cfg.sidebar;
+    var docs = state.docs.slice();
+    var ex = c.exclude || [];
+    if (ex.length) {
+      docs = docs.filter(function (d) {
+        return !ex.some(function (p) {
+          p = normDir(p);
+          return d.path === p || d.path.indexOf(p + '/') === 0;
+        });
+      });
+    }
+    var ov = c.docs || {};
+    docs = docs.map(function (d) {
+      var o = ov[d.path];
+      if (!o) return d;
+      if (o.hidden) return null;
+      return (typeof o.title === 'string' && o.title) ? Object.assign({}, d, { title: o.title }) : d;
+    }).filter(Boolean);
+
+    var folders = c.folders || [];
+    if (folders.length) {
+      var allow = folders.map(function (f) { return normDir(typeof f === 'string' ? f : f.dir); });
+      docs = docs.filter(function (d) {
+        return allow.some(function (a) { return d.path.indexOf(a + '/') === 0; });
+      });
+    }
+
+    var rank = {};
+    (c.order || []).forEach(function (p, i) { rank[p] = i; });
+    docs.sort(function (a, b) {
+      var ra = (a.path in rank) ? rank[a.path] : Infinity;
+      var rb = (b.path in rank) ? rank[b.path] : Infinity;
+      if (ra !== rb) return ra - rb;
+      return dirOf(a.path).localeCompare(dirOf(b.path), 'zh-Hans-CN') || byPathZh(a, b);
+    });
+    state.visible = docs;
+  }
+
+  /* ---------- 侧栏 ---------- */
+  function summaryOf(doc) {
+    var lines = String(doc.text || '').split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i].trim();
+      if (!l || /^#{1,6}\s/.test(l) || /^\||^>|^```|^[-*+]\s|^\d+[.)]\s|^<|^-{3,}$/.test(l)) continue;
+      var s = Core.plain(l).replace(/\s+/g, ' ');
+      return s.length > 88 ? s.slice(0, 88) + '…' : s;
+    }
+    return '';
+  }
+  function groupDocs(docs) {
+    var folders = state.cfg.sidebar.folders || [];
+    var labelOf = {}, rankOf = {};
+    folders.forEach(function (f, i) {
+      var dir = normDir(typeof f === 'string' ? f : f.dir);
+      rankOf[dir] = i;
+      if (f && typeof f === 'object' && f.label) labelOf[dir] = f.label;
+    });
+    var groups = [], map = {};
+    docs.forEach(function (d) {
+      var dir = dirOf(d.path) || '.';
+      if (!map[dir]) {
+        map[dir] = { dir: dir, label: labelOf[dir] || (dir === '.' ? '根目录' : dir), docs: [] };
+        groups.push(map[dir]);
+      }
+      map[dir].docs.push(d);
+    });
+    groups.sort(function (a, b) {
+      var ra = (a.dir in rankOf) ? rankOf[a.dir] : Infinity;
+      var rb = (b.dir in rankOf) ? rankOf[b.dir] : Infinity;
+      if (ra !== rb) return ra - rb;
+      if (a.dir === '.') return -1;
+      if (b.dir === '.') return 1;
+      return a.dir.localeCompare(b.dir, 'zh-Hans-CN');
+    });
+    return groups;   // 组内顺序沿用 applyDocFilter 排好的顺序
+  }
+  function searchDocs(q) {
+    q = q.trim().toLowerCase();
+    if (!q) return null;
+    var hits = [];
+    state.visible.forEach(function (d) {
+      var nameHit = (d.title + ' ' + d.path).toLowerCase().indexOf(q) >= 0;
+      var count = 0, snippet = '', text = String(d.text || ''), low = text.toLowerCase();
+      var idx = low.indexOf(q);
+      while (idx >= 0 && count < 500) {
+        count++;
+        if (!snippet) {
+          snippet = text.slice(Math.max(0, idx - 24), idx + q.length + 46).replace(/\s+/g, ' ').trim();
+        }
+        idx = low.indexOf(q, idx + q.length);
+      }
+      if (nameHit || count) hits.push({ doc: d, nameHit: nameHit, count: count, snippet: snippet });
+    });
+    hits.sort(function (a, b) { return (b.nameHit - a.nameHit) || (b.count - a.count); });
+    return hits;
+  }
+  function renderSidebar() {
+    var q = $('search').value;
+    var tree = $('tree');
+    var showCounts = state.cfg.sidebar.showCounts !== false;
+    var hits = searchDocs(q);
+
+    if (hits) {
+      if (!hits.length) {
+        tree.innerHTML = '<div class="empty">没有匹配「' + esc(q) + '」的文档</div>';
+        return;
+      }
+      var h = '<div class="dir">搜索结果 <span class="n">' + hits.length + ' 篇</span></div>';
+      hits.forEach(function (r) {
+        h += '<a class="docitem' + (state.current && state.current.path === r.doc.path ? ' active' : '') +
+          '" href="' + docHref(r.doc.path) + '">' +
+          '<span class="t">' + esc(r.doc.title) +
+          (r.count ? ' <span class="hit">' + r.count + ' 处</span>' : '') + '</span>' +
+          '<span class="s">' + esc(r.snippet || r.doc.path) + '</span></a>';
+      });
+      tree.innerHTML = h;
+      return;
+    }
+
+    var html = '';
+    groupDocs(state.visible).forEach(function (g) {
+      html += '<div class="dir">' + esc(g.label) +
+        (showCounts ? ' <span class="n">' + g.docs.length + '</span>' : '') + '</div>';
+      g.docs.forEach(function (d) {
+        var active = state.current && state.current.path === d.path;
+        html += '<a class="docitem' + (active ? ' active' : '') + '" href="' + docHref(d.path) +
+          '" title="' + esc(d.path) + '">' +
+          '<span class="t">' + esc(d.title) + '</span>' +
+          '<span class="s">' + esc(baseOf(d.path)) + '</span></a>';
+      });
+    });
+    tree.innerHTML = html ||
+      '<div class="empty">当前没有可显示的文档。<br>请检查 config.json 的 folders / exclude / docs 设置。</div>';
+  }
+  function renderFoot() {
+    var total = state.docs.length, shown = state.visible.length;
+    var chars = state.visible.reduce(function (n, d) { return n + String(d.text || '').length; }, 0);
+    var lines = [];
+    lines.push('目录共 <strong>' + total + '</strong> 篇' +
+      (shown !== total ? ' · 当前显示 <strong>' + shown + '</strong> 篇' : '') +
+      ' · 约 ' + (chars / 10000).toFixed(1) + ' 万字' +
+      (state.skipped ? ' · 忽略 ' + state.skipped + ' 个非 md 文件' : ''));
+    lines.push('数据来源：' + (state.mode === 'live' ? '实时读取 docs/'
+      : '离线快照' + (state.generatedAt ? '（' + new Date(state.generatedAt).toLocaleString('zh-CN') + '）' : '')));
+    lines.push('显示内容由 <code>config.json</code> 管理');
+    lines.push('快捷键：<kbd>[/]</kbd> 左右栏 · <kbd>/</kbd> 搜索 · <kbd>Esc</kbd> 清除 · <kbd>Ctrl</kbd>+<kbd>P</kbd> 打印');
+    if (state.cfgError) lines.push('<span class="warn">⚠ ' + esc(state.cfgError) + '</span>');
+    $('foot').innerHTML = lines.join('<br>');
+  }
+
+  /* ---------- 首页 ---------- */
+  function renderOverview() {
+    state.current = null;
+    $('docPath').textContent = '';
+    $('tocList').innerHTML = '<li class="toc-empty">打开一篇文档后显示目录</li>';
+    applyConfig();
+    var h = state.cfg.home || {};
+    var total = state.docs.length, shown = state.visible.length;
+    var html = '';
+    if (h.title) html += '<h1>' + esc(h.title) + '</h1>';
+    html += '<div class="meta">' +
+      '<span>共 ' + total + ' 篇 Markdown 文档</span>' +
+      (shown !== total ? '<span>当前显示 ' + shown + ' 篇（由 config.json 控制）</span>' : '') +
+      '<span>' + (state.mode === 'live' ? '实时读取 docs/' : '离线快照模式') + '</span>' +
+      '<span class="no-print">点击卡片开始阅读</span></div>';
+    if (state.cfgError) html += '<div class="notice">⚠ ' + esc(state.cfgError) + '</div>';
+    if (h.intro) {
+      try { html += '<div class="intro">' + Core.render(String(h.intro), ctxFor('')).html + '</div>'; }
+      catch (e) { html += '<div class="notice">⚠ 首页 intro 渲染失败：' + esc(e.message) + '</div>'; }
+    }
+    if (h.showCards !== false) {
+      groupDocs(state.visible).forEach(function (g) {
+        html += '<h2>' + esc(g.label) + '</h2><div class="cards">';
+        g.docs.forEach(function (d) {
+          html += '<a class="card" href="' + docHref(d.path) + '">' +
+            '<div class="ct">' + esc(d.title) + '</div>' +
+            '<div class="cp">' + esc(d.path) + '</div>' +
+            '<div class="cs">' + esc(summaryOf(d)) + '</div>' +
+            '<div class="cc">' + (d.size ? (d.size / 1024).toFixed(1) + ' KB · ' : '') +
+            '约 ' + String(d.text || '').length + ' 字</div></a>';
+        });
+        html += '</div>';
+      });
+    }
+    $('article').innerHTML = '<div class="overview">' + html + '</div>';
+    popArticle();
+    window.scrollTo(0, 0);
+  }
+
+  /* ---------- 正文 ---------- */
+  function renderDoc(path, section) {
+    var doc = state.byPath[path];
+    if (!doc) { renderOverview(); return; }
+    state.current = doc;
+    var out;
+    try {
+      out = Core.render(doc.text || '', ctxFor(path));
+    } catch (e) {
+      $('article').innerHTML = '<h1>渲染失败</h1><pre class="code"><code>' +
+        esc(String((e && e.stack) || e)) + '</code></pre>';
+      return;
+    }
+    state.headings = out.headings;
+    var chars = String(doc.text || '').length;
+    $('article').innerHTML =
+      '<div class="meta"><span>' + (doc.size ? (doc.size / 1024).toFixed(1) + ' KB' : '') + '</span>' +
+      '<span>约 ' + chars + ' 字</span>' +
+      '<span>' + out.headings.length + ' 个标题</span>' +
+      '<span class="no-print">' + esc(doc.path) + '</span></div>' + out.html;
+    $('docPath').textContent = doc.path;
+    popArticle();
+    document.title = doc.title + (state.cfg.subtitle ? ' ' + state.cfg.subtitle : '');
+
+    var maxDepth = Number(state.cfg.toc.maxDepth) || 4;
+    var toc = '';
+    out.headings.forEach(function (h) {
+      if (h.level < 2 || h.level > maxDepth) return;
+      toc += '<li class="lv' + h.level + '"><a href="' + docHref(doc.path, h.id) +
+        '" data-sec="' + esc(h.id) + '">' + esc(Core.plain(h.text)) + '</a></li>';
+    });
+    $('tocList').innerHTML = toc || '<li class="toc-empty">本文无二级标题</li>';
+
+    renderSidebar();
+    var idx = state.visible.indexOf(doc);
+    $('prevBtn').disabled = idx <= 0;
+    $('nextBtn').disabled = idx < 0 || idx >= state.visible.length - 1;
+
+    requestAnimationFrame(function () {
+      var el = section ? document.getElementById(section) : null;
+      if (el) el.scrollIntoView({ block: 'start' });
+      else window.scrollTo(0, 0);
+      setupSpy();
+    });
+  }
+
+  /* ---------- 目录高亮 ---------- */
+  var spy = null;
+  function setupSpy() {
+    if (spy) spy.disconnect();
+    var links = Array.prototype.slice.call($('tocList').querySelectorAll('a[data-sec]'));
+    if (!links.length || !('IntersectionObserver' in window)) return;
+    var map = {};
+    links.forEach(function (a) { map[a.getAttribute('data-sec')] = a; });
+    spy = new IntersectionObserver(function (entries) {
+      var visible = entries.filter(function (e) { return e.isIntersecting; });
+      if (!visible.length) return;
+      visible.sort(function (a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
+      var id = visible[0].target.id;
+      links.forEach(function (a) { a.classList.remove('active'); });
+      if (map[id]) map[id].classList.add('active');
+    }, { rootMargin: '-64px 0px -70% 0px', threshold: 0 });
+    Object.keys(map).forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) spy.observe(el);
+    });
+  }
+
+  /* ---------- 路由 ---------- */
+  function route() {
+    var h = parseHash();
+    if (h.p && state.byPath[h.p]) renderDoc(h.p, h.h || null);
+    else renderOverview();
+  }
+
+  /* ---------- 事件 ---------- */
+  $('themeBtn').onclick = function () {
+    applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  };
+  $('printBtn').onclick = function () { window.print(); };
+  $('linkBtn').onclick = function () {
+    var btn = this;
+    var done = function () {
+      btn.textContent = '已复制';
+      setTimeout(function () { btn.textContent = '链接'; }, 1400);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(location.href).then(done, function () { window.prompt('复制链接：', location.href); });
+    } else { window.prompt('复制链接：', location.href); }
+  };
+  $('toggleLeft').onclick = function () { togglePane('left'); };
+  $('toggleRight').onclick = function () { togglePane('right'); };
+  $('closeLeft').onclick = function () { setPane('left', false); };
+  $('closeRight').onclick = function () { setPane('right', false); };
+  $('scrim').onclick = function () { setPane('left', false); setPane('right', false); };
+  $('prevBtn').onclick = function () { step(-1); };
+  $('nextBtn').onclick = function () { step(1); };
+  function step(d) {
+    if (!state.current) return;
+    var i = state.visible.indexOf(state.current) + d;
+    if (i < 0 || i >= state.visible.length) return;
+    location.hash = docHref(state.visible[i].path);
+  }
+  $('search').oninput = renderSidebar;
+  $('search').onkeydown = function (e) {
+    if (e.key === 'Escape') { this.value = ''; renderSidebar(); this.blur(); }
+    if (e.key === 'Enter') {
+      var first = $('tree').querySelector('a.docitem');
+      if (first) {
+        location.hash = first.getAttribute('href');
+        if (window.innerWidth < NARROW) setPane('left', false);
+      }
+    }
+  };
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest) return;
+    if (e.target.closest('a.docitem') && window.innerWidth < NARROW) setPane('left', false);
+  });
+  document.addEventListener('keydown', function (e) {
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') return;
+    if (e.key === '/') { e.preventDefault(); if (state.cfg.sidebar.showSearch !== false) { $('search').focus(); $('search').select(); } return; }
+    if (e.key === '[') { e.preventDefault(); togglePane('left'); return; }
+    if (e.key === ']') { e.preventDefault(); togglePane('right'); }
+  });
+  window.addEventListener('hashchange', route);
+
+  /* ---------- 启动 ---------- */
+  (async function main() {
+    await loadConfig();
+    applyConfig();
+    loadLayout();
+    enableMotion();
+    state.docs = await loadDocs();
+    indexDocs(state.docs);
+    applyDocFilter();
+    renderFoot();
+    renderSidebar();
+    route();
+  })();
+})();
+</script>
+</body>
+</html>

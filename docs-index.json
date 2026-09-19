@@ -1,0 +1,40 @@
+{
+  "generatedAt": "2026-09-19T03:23:42.905Z",
+  "docsRoot": "docs/",
+  "count": 4,
+  "skipped": 0,
+  "docs": [
+    {
+      "path": "docs/示例/表格与代码.md",
+      "dir": "docs/示例",
+      "name": "表格与代码.md",
+      "title": "表格与代码",
+      "size": 2010,
+      "mtime": "2026-09-19T02:49:40.200Z"
+    },
+    {
+      "path": "docs/示例/Markdown 语法示例.md",
+      "dir": "docs/示例",
+      "name": "Markdown 语法示例.md",
+      "title": "Markdown 语法示例",
+      "size": 1909,
+      "mtime": "2026-09-19T02:48:49.538Z"
+    },
+    {
+      "path": "docs/指南/界面与快捷键.md",
+      "dir": "docs/指南",
+      "name": "界面与快捷键.md",
+      "title": "界面与快捷键",
+      "size": 1656,
+      "mtime": "2026-09-19T02:48:42.548Z"
+    },
+    {
+      "path": "docs/指南/快速开始.md",
+      "dir": "docs/指南",
+      "name": "快速开始.md",
+      "title": "快速开始",
+      "size": 1939,
+      "mtime": "2026-09-19T03:23:18.072Z"
+    }
+  ]
+}
