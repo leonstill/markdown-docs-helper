@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-19T09:17:30.067Z",
+  "generatedAt": "2026-09-22T06:47:27.965Z",
   "docsRoot": "docs/",
   "count": 5,
   "kinds": {
@@ -14,8 +14,8 @@
       "name": "表格与代码.md",
       "kind": "markdown",
       "title": "表格与代码",
-      "size": 2010,
-      "mtime": "2026-09-19T02:49:40.200Z"
+      "size": 2087,
+      "mtime": "2026-09-22T06:44:58.255Z"
     },
     {
       "path": "docs/示例/思维导图-印检贴一体设备质量追溯改造.mermaid",

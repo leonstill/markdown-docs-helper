@@ -62,6 +62,14 @@ console.log(`被测文档 ${docs.length} 篇（docs/ 与 test/fixtures/）\n`);
 const byPath = {}, byBase = {};
 for (const d of docs) { byPath[d.path] = d; byBase[path.posix.basename(d.path)] = d; }
 
+/* 每篇文档的「标题编号 -> 锚点 id」表，供跨文档章节引用（父文档 §4.1）使用 */
+const sectionMaps = {};
+for (const d of docs) {
+  const m = {};
+  for (const h of Core.scanHeadings(d.text)) if (h.num && !(h.num in m)) m[h.num] = h.id;
+  sectionMaps[d.path] = m;
+}
+
 function makeCtx(docPath) {
   return {
     docPath,
@@ -78,6 +86,7 @@ function makeCtx(docPath) {
       if (byBase[b]) return { path: byBase[b].path, section };
       return null;
     },
+    sectionsOf: (p) => sectionMaps[p] || null,
     resolveAsset: (p) => p,
   };
 }
@@ -228,6 +237,78 @@ if (ref) {
   else { console.log(`x 跨文档链接未生成（${docN} 处）`); fail++; }
   if (/§9\.9/.test(h) && !/§9\.9<\/a>/.test(h)) console.log('v 不存在的章节编号保持原样');
   else { console.log('x 不存在的章节编号被错误链接'); fail++; }
+}
+
+/* ---------- 跨文档章节引用：「父文档 §4.1」要跳到父文档，而不是本文档的同名编号 ---------- */
+const xref = need('fixtures/子文档-引用父文档.md');
+const parent = need('fixtures/父文档.md');
+if (xref && parent) {
+  const ctx = makeCtx(xref.path);
+  const info = Core.parseRefs(xref.text);
+  const aliases = Object.keys(info.byAlias);
+  if (aliases.length === 2 && aliases.includes('父文档') && aliases.includes('总览'))
+    console.log(`v 文首声明解析出 ${aliases.length} 个别名（${aliases.join('、')}）`);
+  else { console.log('x 文首声明解析异常: ' + JSON.stringify(info.items)); fail++; }
+
+  ctx.refs = {};
+  info.items.forEach((it) => { const r = ctx.resolveDoc(it.target); if (r) ctx.refs[it.alias] = r.path; });
+  ctx.declLines = info.lineSet;
+  const h = Core.render(xref.text, ctx).html;
+
+  if (!/父文档指|总览:|&lt;!--/.test(h)) console.log('v 声明行不参与正文渲染');
+  else { console.log('x 声明行漏进了正文'); fail++; }
+
+  const hrefTo = (p, num) => ctx.docHref(p, sectionMaps[p][num]);
+  const anchors = [...h.matchAll(/<a class="([^"]*)"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)]
+    .map((m) => ({ cls: m[1], href: m[2].replace(/&amp;/g, '&'), text: m[3].replace(/<[^>]+>/g, '').trim() }));
+
+  const cases = [
+    ['父文档 §4.3', hrefTo(parent.path, '4.3'), 'secref xref'],           // 别名写法 -> 父文档的 4.3
+    ['父文档§2.1', hrefTo(parent.path, '2.1'), 'secref xref'],            // 别名与 § 之间没空格
+    ['总览 §4.1', hrefTo(parent.path, '4.1'), 'secref xref'],             // 第二条声明
+    ['docs/fixtures/父文档.md §1.1', hrefTo(parent.path, '1.1'), 'docref xref'],   // 零声明写法：路径
+    ['父文档.md §4.1', hrefTo(parent.path, '4.1'), 'docref xref'],        // 零声明写法：只写文件名
+    ['§4.3', hrefTo(xref.path, '4.3'), 'secref'],                          // 裸编号仍然指本文档
+  ];
+  let okN = 0;
+  for (const [label, want, cls] of cases) {
+    const a = anchors.find((x) => x.text === label);
+    if (!a) { console.log(`x 没找到引用链接：${label}`); fail++; continue; }
+    if (a.href !== want) { console.log(`x ${label} 跳错了：${a.href}\n      期望 ${want}`); fail++; continue; }
+    if (!cls.split(/\s+/).every((c) => a.cls.split(/\s+/).includes(c))) { console.log(`x ${label} 的 class 少了 ${cls}（实为 ${a.cls}）`); fail++; continue; }
+    okN++;
+  }
+  if (okN === cases.length) console.log(`v 跨文档章节引用跳对目标（${okN} 处，含裸编号只指本文档）`);
+
+  /* 兜底分支必须有触发条件成立的用例：目标文档里没有 §9.9 */
+  const miss = [['父文档 §9.9', 'secref xref missing'], ['父文档.md §9.9', 'docref xref missing']];
+  let missN = 0;
+  for (const [label, cls] of miss) {
+    const a = anchors.find((x) => x.text === label);
+    if (!a) { console.log(`x 没找到缺失编号的引用：${label}`); fail++; continue; }
+    if (a.cls !== cls) { console.log(`x ${label} 的 class 应为 ${cls}（实为 ${a.cls}）`); fail++; continue; }
+    if (a.href !== ctx.docHref(parent.path)) { console.log(`x ${label} 应降级到父文档顶部，实为 ${a.href}`); fail++; continue; }
+    missN++;
+  }
+  if (missN === miss.length) console.log('v 目标里没有该编号时降级到目标文档顶部并标 missing（2 处）');
+}
+
+/* ---------- 文首声明的边界：既不漏吞，也不误吞正文 ---------- */
+{
+  const prelude = Core.parseRefs('父文档指: `docs/a.md`\n<!-- 父文档: docs/b.md -->\n\n# 标题\n\n总览: docs/c.md\n\n正文。\n');
+  if (prelude.items.length === 2 && prelude.byAlias['父文档'] === 'docs/a.md' &&
+      prelude.lineSet[0] && prelude.lineSet[1] && prelude.lineSet[5])
+    console.log('v 声明写在标题前后都能认；重复别名只认第一条，但两行都从正文抹掉');
+  else { console.log('x 声明区解析异常: ' + JSON.stringify(prelude.items) + ' lineSet=' + JSON.stringify(prelude.lineSet)); fail++; }
+
+  const afterBody = Core.parseRefs('# 标题\n\n正文第一段。\n\n相关文档: docs/x.md\n');
+  if (!afterBody.items.length) console.log('v 正文开始后不再把「XX: docs/x.md」当声明（不会误吞正文）');
+  else { console.log('x 正文里的冒号行被误当声明: ' + JSON.stringify(afterBody.items)); fail++; }
+
+  const notMd = Core.parseRefs('说明: 见 README\n');
+  if (!notMd.items.length && !Object.keys(notMd.lineSet).length)
+    console.log('v 目标是 .md 之外的「XX: yy」不当声明（原样保留在正文里）');
+  else { console.log('x 非 .md 目标被误当声明: ' + JSON.stringify(notMd.items)); fail++; }
 }
 
 const evil = Core.render('# T\n\n<script>alert(1)</script>\n\n| a | b |\n| --- | --- |\n| <img src=x onerror=1> | `y` |\n', makeCtx('docs/x.md')).html;

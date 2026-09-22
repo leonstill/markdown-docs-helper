@@ -26,6 +26,7 @@
 | 脚本 | 作用 | 命令 |
 | --- | --- | --- |
 | `ui-verify.mjs` | 界面回归。用无头 Chrome + CDP 跑 40 项左右断言：默认状态、两侧栏开关与 `✕`、快捷键、状态记忆、窄屏抽屉与遮罩、实时模式、改 `config.json` 即时生效、配置写错时的降级提示、全程无 console 错误。**自己拉起 `--serve` 实例并自动收尾** | `node test/ui-verify.mjs` |
+| `xref-ui.mjs` | 跨文档章节引用界面回归（21 项断言）：文首声明变成「引用目标」徽标、声明行不进正文也不污染左栏摘要、「父文档 §4.3」真的跳到父文档的 4.3 且落点闪烁、`` `docs/父文档.md` §1.1 `` 零声明写法、目标里没有该编号时降级到目标文档顶部并标 `missing`、裸 `§4.3` 仍指本文档。**自己搭临时文档目录起 `--serve`，跑完删临时目录并用默认 `docs/` 重建产物** | `node test/xref-ui.mjs` |
 | `mindmap-ui.mjs` | 思维导图界面回归（40 项断言）：左栏「导图」标记、画布真的画出节点且中文不是实体、点节点折叠并同步到大纲、大纲三角折叠与文字跳转、全屏按钮（铺满窗口 / 盖住顶栏 / 锁滚动 / `Esc` 还原 / 换文档解锁）、导出 SVG/PNG 的 Blob 内容与类型、深色主题重新上色、关掉 `mindmap.enabled` 后退回普通文本。**自己拉起 `--serve` 实例、临时改 `config.json` 后一定会还原** | `node test/mindmap-ui.mjs` |
 | `shot-anim.mjs` | 视觉/几何抽查（不做断言，只打印量化结果 + 截图）：侧栏收起是否逐帧渐变、有没有横向滚动条、右栏列表有没有被滚动条截断、滚动后侧栏是否仍粘在顶栏下、正文入场动画名 | `node test/shot-anim.mjs` |
 
@@ -49,3 +50,6 @@ $env:CHROME = "C:\Program Files\Google\Chrome\Application\chrome.exe"
   注意该目录只收 `.mermaid`，不会被 markdown 的回归顺手扫到。
 - fixtures 里的文档路径统一是 `docs/fixtures/xxx.md`，因此 fixture 之间可以互相引用，
   用来验证 `§x.y` 章节引用与 `` `docs/xxx.md` `` 跨文档链接。
+- 跨文档章节引用用 `fixtures/父文档.md` + `fixtures/子文档-引用父文档.md` 这一对：
+  子文档里自带一个 4.3，专门用来证明「父文档 §4.3」不会再误跳到本文档。加新写法时请同时
+  补 `verify-render.mjs` 的断言与 `xref-ui.mjs` 的浏览器断言（含"目标里没有该编号"的兜底分支）。

@@ -20,6 +20,7 @@
     "test:serve": "node test/serve-smoke.mjs",
     "test:serve-host": "node test/serve-host.mjs",
     "test:ui": "node test/ui-verify.mjs",
+    "test:xref-ui": "node test/xref-ui.mjs",
     "test:mindmap-ui": "node test/mindmap-ui.mjs",
     "test:mindmap-ui:realtime": "node test/mindmap-ui.mjs --realtime",
     "shots": "node test/shot-anim.mjs",

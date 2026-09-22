@@ -142,9 +142,64 @@
       docHref: docHref,
       resolveDoc: resolveDoc,
       resolveAsset: resolveAsset,
+      sectionsOf: sectionsOf,
       headings: [],
       sectionMap: {}
     };
+  }
+
+  /* ---------- 跨文档章节引用 ----------
+     目标文档的「标题编号 -> 锚点 id」按需扫描并缓存：正文都在内存里（实时模式逐篇
+     fetch、快照模式整篇内嵌），所以「父文档 §4.1」能指到父文档真正的 4.1。 */
+  var sectionCache = {};
+  function sectionsOf(path) {
+    if (!path) return null;
+    if (Object.prototype.hasOwnProperty.call(sectionCache, path)) return sectionCache[path];
+    var doc = state.byPath[path];
+    if (!doc) return null;
+    var map = {}, hs = Core.scanHeadings(String(doc.text || ''));
+    for (var i = 0; i < hs.length; i++) {
+      if (hs[i].num && !(hs[i].num in map)) map[hs[i].num] = hs[i].id;
+    }
+    sectionCache[path] = map;
+    return map;
+  }
+
+  /* 文首「引用目标」声明（父文档 / 总览 / 接口约定…）：把别名解析成真实文档路径 */
+  function docRefs(doc) {
+    var info = Core.parseRefs(String((doc && doc.text) || ''));
+    var map = {};
+    info.items.forEach(function (it) {
+      var r = resolveDoc(it.target);
+      if (!r) {
+        var joined = resolveAsset(it.target);              // 也认相对当前文档写的路径
+        if (joined && joined !== it.target) r = resolveDoc(joined);
+      }
+      it.path = r ? r.path : null;
+      it.title = r && state.byPath[r.path] ? state.byPath[r.path].title : null;
+      if (r) map[it.alias] = r.path;
+    });
+    return { items: info.items, map: map, lineSet: info.lineSet };
+  }
+  function docRefsHtml(refs) {
+    if (!refs.items.length) return '';
+    var h = '<div class="docrefs"><span class="dl">引用目标</span>';
+    refs.items.forEach(function (it) {
+      h += it.path
+        ? '<a class="dref" href="' + docHref(it.path) + '" title="打开 ' + esc(it.path) + '">' +
+          esc(it.alias) + ' <span class="ar">→</span> ' + esc(it.title || it.path) + '</a>'
+        : '<span class="dref broken" title="文档目录里找不到 ' + esc(it.target) + '">' +
+          esc(it.alias) + ' <span class="ar">→</span> ' + esc(it.target) + '<em>找不到</em></span>';
+    });
+    return h + '</div>';
+  }
+  /* 跳到章节后闪一下，跨文档跳转时最容易怀疑「是不是没跳对」 */
+  function flashHeading(el) {
+    if (!el || !el.classList) return;
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+    setTimeout(function () { el.classList.remove('flash'); }, 1600);
   }
 
   /* ---------- 配置载入：http 下实时读 config.json，file:// 下用内置副本 ---------- */
@@ -243,6 +298,7 @@
   }
   function indexDocs(list) {
     state.byPath = {}; state.byBase = {};
+    sectionCache = {};
     list.forEach(function (d) {
       state.byPath[d.path] = d;
       var b = baseOf(d.path);
@@ -330,9 +386,11 @@
       } catch (e) { return '思维导图'; }
     }
     var lines = String(doc.text || '').split('\n');
+    var decls = Core.parseRefs(String(doc.text || '')).lineSet;   // 文首声明行不算摘要
     for (var i = 0; i < lines.length; i++) {
       var l = lines[i].trim();
-      if (!l || /^#{1,6}\s/.test(l) || /^\||^>|^```|^[-*+]\s|^\d+[.)]\s|^<|^-{3,}$/.test(l)) continue;
+      if (!l || decls[i]) continue;
+      if (/^#{1,6}\s/.test(l) || /^\||^>|^```|^[-*+]\s|^\d+[.)]\s|^<|^-{3,}$/.test(l)) continue;
       var s = Core.plain(l).replace(/\s+/g, ' ');
       return s.length > 88 ? s.slice(0, 88) + '…' : s;
     }
@@ -488,8 +546,12 @@
     state.mindmap = null;                 // 离开导图：把画布拆掉，换回普通正文
     exitMindmapFullscreen();             // 上一页要是全屏看的导图，这里得把滚动锁解掉
     var out;
+    var refs = docRefs(doc);
     try {
-      out = Core.render(doc.text || '', ctxFor(path));
+      var ctx = ctxFor(path);
+      ctx.refs = refs.map;               // 别名 -> 真实文档路径（供「父文档 §4.1」使用）
+      ctx.declLines = refs.lineSet;      // 文首声明行不参与正文渲染
+      out = Core.render(doc.text || '', ctx);
     } catch (e) {
       $('article').innerHTML = '<h1>渲染失败</h1><pre class="code"><code>' +
         esc(String((e && e.stack) || e)) + '</code></pre>';
@@ -501,7 +563,8 @@
       '<div class="meta"><span>' + (doc.size ? (doc.size / 1024).toFixed(1) + ' KB' : '') + '</span>' +
       '<span>约 ' + chars + ' 字</span>' +
       '<span>' + out.headings.length + ' 个标题</span>' +
-      '<span class="no-print">' + esc(doc.path) + '</span></div>' + out.html;
+      '<span class="no-print">' + esc(doc.path) + '</span></div>' +
+      docRefsHtml(refs) + out.html;
     $('docPath').textContent = doc.path;
     popArticle();
     document.title = doc.title + (state.cfg.subtitle ? ' ' + state.cfg.subtitle : '');
@@ -522,7 +585,7 @@
 
     requestAnimationFrame(function () {
       var el = section ? document.getElementById(section) : null;
-      if (el) el.scrollIntoView({ block: 'start' });
+      if (el) { el.scrollIntoView({ block: 'start' }); flashHeading(el); }
       else window.scrollTo(0, 0);
       setupSpy();
     });

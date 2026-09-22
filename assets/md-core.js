@@ -47,6 +47,50 @@ var MarkdownCore = (function () {
     var m = /^\s*(\d+(?:\.\d+)*)/.exec(plain(text));
     return m ? m[1] : null;
   }
+
+  /* ---------- 文首「引用目标」声明 ----------
+     用来把「父文档 §4.1」这类跨文档章节引用指到真正的地方。只认正文开始前的
+     声明区（可以夹着空行与标题），两种写法等价：
+       父文档指: `docs/方案/崩溃与掉电场景数据保障方案要点.md`
+       <!-- 父文档: docs/方案/崩溃与掉电场景数据保障方案要点.md -->
+     别名随便取、可以声明多条（父文档 / 总览 / 接口约定…）；声明行不再当正文渲染。
+     这里只做「别名 -> 目标路径字符串」，路径解析交给调用方（浏览器里是 resolveDoc）。 */
+  var RE_DECL = /^(?:<!--[ \t]*)?([\p{L}\p{N}_-]{1,12}?)[ \t]*(?:指)?[ \t]*[:：=][ \t]*`?([^`>\s]+)`?[ \t]*(?:-->)?$/u;
+  var DECL_SCAN_LINES = 40;      // 声明区只在文件头部这些行里找，避免正文误触发
+
+  function parseRefs(md) {
+    var lines = String(md).replace(/\r\n?/g, '\n').split('\n');
+    var items = [], byAlias = {}, lineSet = {}, fence = null;
+    for (var i = 0; i < lines.length && i < DECL_SCAN_LINES; i++) {
+      var raw = lines[i], t = raw.trim();
+      var fm = RE_FENCE.exec(raw);
+      if (fm) {
+        if (!fence) fence = fm[1].charAt(0);
+        else if (fm[1].charAt(0) === fence) fence = null;
+        continue;
+      }
+      if (fence) continue;
+      if (!t) continue;                       // 声明区里允许空行
+      if (RE_ATX.test(raw)) continue;         // 声明写在标题前或标题后都能认
+      var m = RE_DECL.exec(t);
+      if (!m) break;                          // 正文开始了，后面的行不再当声明
+      var target = m[2].replace(/[ \t]+$/, '');
+      if (!/\.md$/i.test(target)) break;      // 只认 markdown 目标
+      var alias = m[1].replace(/指$/, '');    // 「父文档指:」这种写法去掉尾字
+      lineSet[i] = true;                      // 认出来的声明行一律不当正文（含重复别名那行）
+      if (!alias || byAlias[alias] !== undefined) continue;   // 同名以第一条为准
+      items.push({ alias: alias, target: target, line: i });
+      byAlias[alias] = target;
+    }
+    return { items: items, byAlias: byAlias, lineSet: lineSet };
+  }
+  /* 把声明行从正文里抹掉（保持行号不变，标题配对逻辑不受影响） */
+  function dropLines(md, lineSet) {
+    var lines = md.split('\n');
+    for (var i = 0; i < lines.length; i++) if (lineSet[i]) lines[i] = '';
+    return lines.join('\n');
+  }
+  function reEsc(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
   var RE_CJK = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f]/;
 
   /* 扫描标题（跳过代码围栏），标题 id 与正文渲染时使用的 id 完全一致 */
@@ -78,25 +122,46 @@ var MarkdownCore = (function () {
     depth = depth || 0;
     var stash = [];
     function put(html) { stash.push(html); return '\u0000' + (stash.length - 1) + '\u0000'; }
+    /* 跨文档章节引用：拿目标文档的「编号 -> 锚点 id」表；目标里没有这个编号时
+       退到该文档顶部，并给链接加 missing 标记（虚线 + 悬停说明），不静默失效。 */
+    function xrefAnchor(label, path, num, cls, why) {
+      var map = ctx && ctx.sectionsOf ? ctx.sectionsOf(path) : null;
+      var id = (map && map[num]) || null;
+      var href = ctx && ctx.docHref ? ctx.docHref(path, id) : '#';
+      var title = (why || path) + ' §' + num +
+        (id ? '' : '（' + path + ' 里没有 §' + num + '，只能跳到该文档顶部）');
+      return '<a class="' + cls + (id ? '' : ' missing') + '" href="' + attr(href) +
+        '" title="' + attr(title) + '">' + label + '</a>';
+    }
 
     var s = esc(src);
 
     // 反斜杠转义
     s = s.replace(/\\([\\`*_{}\[\]()#+\-.!~|>])/g, function (m, c) { return put(c); });
 
-    // 行内代码（可点击的跨文档引用在这里识别）
-    s = s.replace(/(`+)([\s\S]*?)\1/g, function (m, tick, code) {
+    // 行内代码（可点击的跨文档引用在这里识别；紧跟其后的 §n.n 并成跨文档章节引用）
+    s = s.replace(/(`+)([\s\S]*?)\1([ \t]*§[ \t]?(\d+(?:\.\d+)*))?/g, function (m, tick, code, tail, num) {
       code = code.replace(/\n/g, ' ');
       if (/^ .* $/.test(code) && code.trim()) code = code.slice(1, -1);
       var ref = ctx && ctx.resolveDoc ? ctx.resolveDoc(code.trim()) : null;
+      if (ref && num && ctx.sectionsOf) {
+        return put(xrefAnchor('<code>' + code + '</code> §' + num, ref.path, num, 'docref xref', ref.path));
+      }
       if (ref) {
         return put('<a class="docref" href="' + attr(ctx.docHref(ref.path, ref.section)) +
-          '" title="打开 ' + attr(ref.path) + '"><code>' + code + '</code></a>');
+          '" title="打开 ' + attr(ref.path) + '"><code>' + code + '</code></a>') + (tail || '');
       }
-      return put('<code>' + code + '</code>');
+      return put('<code>' + code + '</code>') + (tail || '');
     });
 
-    // §章节引用
+    // 「别名 §n.n」跨文档章节引用（别名来自文首声明；ctx.aliasRe 在 render 里预编译）
+    if (ctx && ctx.aliasRe) {
+      s = s.replace(ctx.aliasRe, function (m, alias, num) {
+        return put(xrefAnchor(m, ctx.refs[alias], num, 'secref xref', alias));
+      });
+    }
+
+    // §章节引用（默认只指本文档）
     if (ctx && ctx.sectionMap) {
       s = s.replace(/§[ \t]?(\d+(?:\.\d+)*)/g, function (m, num) {
         var id = ctx.sectionMap[num];
@@ -380,19 +445,37 @@ var MarkdownCore = (function () {
 
   function render(md, ctx) {
     ctx = Object.assign({ usedSlugs: {}, hIndex: 0 }, ctx || {});
-    ctx.headings = scanHeadings(md);
+    var src = String(md).replace(/\r\n?/g, '\n');
+    // 文首声明：调用方（浏览器）可以传入已经解析成真实路径的 refs，否则这里自己解一遍
+    var lineSet = ctx.declLines || null;
+    if (!lineSet) {
+      var info = parseRefs(src);
+      lineSet = info.lineSet;
+      if (!ctx.refs) ctx.refs = info.byAlias;
+    } else if (!ctx.refs) {
+      ctx.refs = {};
+    }
+    src = dropLines(src, lineSet);
+    // 预编译「别名 §n.n」正则：长别名优先，避免短别名抢先匹配
+    var aliases = Object.keys(ctx.refs);
+    if (aliases.length) {
+      aliases.sort(function (a, b) { return b.length - a.length; });
+      ctx.aliasRe = new RegExp('(' + aliases.map(reEsc).join('|') + ')[ \\t]*§[ \\t]?(\\d+(?:\\.\\d+)*)', 'g');
+    }
+    ctx.headings = scanHeadings(src);
     ctx.sectionMap = {};
     for (var i = 0; i < ctx.headings.length; i++) {
       var h = ctx.headings[i];
       if (h.num && !(h.num in ctx.sectionMap)) ctx.sectionMap[h.num] = h.id;
     }
-    var html = blocks(String(md).replace(/\r\n?/g, '\n').replace(/\t/g, '    ').split('\n'), ctx);
-    return { html: html, headings: ctx.headings };
+    var html = blocks(src.replace(/\t/g, '    ').split('\n'), ctx);
+    return { html: html, headings: ctx.headings, refs: ctx.refs, declLines: lineSet };
   }
 
   return {
     render: render,
     scanHeadings: scanHeadings,
+    parseRefs: parseRefs,
     plain: plain,
     slugify: slugify,
     inline: inline
