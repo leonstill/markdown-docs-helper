@@ -79,9 +79,33 @@ function walk(dir, base = '') {
   }
   return out;
 }
-const samples = walk(DOCS).filter((f) => /\.mermaid$/i.test(f.rel));
-console.log(`\n--- 内置样例（${samples.length} 个 .mermaid）---`);
+/* .mermaid 文件里如果写的是别的版式（stateDiagram-v2 等），页面会交给 Mermaid 画成图表，
+   不再按思维导图解析 —— 这些文件归 verify-mermaid.mjs / mermaid-ui 管，这里只登记一下。 */
+const MGCORE = path.join(ROOT, 'assets', 'mermaid-core.js');
+const MG = (function loadMermaidCore() {
+  const box = { module: { exports: {} }, console };
+  vm.createContext(box);
+  new vm.Script(fs.readFileSync(MGCORE, 'utf8') + '\nmodule.exports = MermaidCore;',
+    { filename: 'mermaid-core.js' }).runInContext(box);
+  return box.module.exports;
+})();
+const allMmFiles = walk(DOCS).filter((f) => /\.mermaid$/i.test(f.rel));
+const diagramFiles = allMmFiles.filter((f) => !!MG.diagramKind(fs.readFileSync(f.full, 'utf8')));
+const samples = allMmFiles.filter((f) => !diagramFiles.includes(f));
+console.log(`\n--- 内置样例（${samples.length} 个思维导图 + ${diagramFiles.length} 个整篇图表）---`);
 check(samples.length > 0, 'docs/ 下存在 .mermaid 样例');
+/* 整篇图表：必须被认出是 Mermaid 版式，而且第一行确实是图表关键字（独立再判一次） */
+for (const f of diagramFiles) {
+  const text = fs.readFileSync(f.full, 'utf8');
+  const k = MG.diagramKind(text);
+  const first = (text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').split('\n')
+    .find((l) => l.trim() && !l.trim().startsWith('%%')) || '').trim();
+  const known = /^(stateDiagram-v2|stateDiagram|flowchart|graph|sequenceDiagram|classDiagram|erDiagram|gantt|pie|journey|gitGraph|timeline|quadrantChart|requirementDiagram|sankey-beta|xychart-beta|block-beta|packet-beta|architecture-beta|c4\w*|zenuml)\b/i.test(first);
+  console.log(`  图表 ${f.rel}  ${k.name} · 首行「${first}」`);
+  check(k.id !== 'unknown' && k.id !== 'empty', `${f.rel}：认出是 Mermaid 图表（${k.name}）`);
+  check(known, `${f.rel}：首行确实是图表关键字（独立判定）`);
+  check(!/^\s*mindmap\s*$/im.test(text), `${f.rel}：没有 mindmap 声明，确实不该走导图那条路`);
+}
 for (const f of samples) {
   const text = fs.readFileSync(f.full, 'utf8');
   const tree = MM.parse(text);

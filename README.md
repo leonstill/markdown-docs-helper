@@ -55,7 +55,7 @@ node build-docs.mjs --serve "D:\some\project\docs"
 node build-docs.mjs                        # 扫描 ./docs，刷新 md-viewer.html 内置数据（改完 config 或文档后跑这个）
 node build-docs.mjs <目录>                  # 换一个文档目录（可配合 --check / --serve 使用）
 node build-docs.mjs --check [目录]          # 只检查产物是否已过期（过期时退出码为 1）
-node build-docs.mjs --serve [目录]          # 启动本地实时服务（默认 8899，被占用会自动往后找端口），
+node build-docs.mjs --serve [目录]          # 启动本地实时服务（默认 8899，端口被占用或绑不上会自动往后找端口），
                                            # 并生成实时版 index.html；访问 / 即进实时版
 node build-docs.mjs --serve --port 9000 [目录]
 node build-docs.mjs --serve --lan [目录]    # 绑定所有网卡（0.0.0.0），同一局域网内可访问
@@ -96,17 +96,19 @@ node build-docs.mjs --help                 # 用法说明
 ```
 markdown-docs-helper/
 ├─ page.template.html   # 两个页面唯一的布局来源（改页面结构改这里；数据/引擎位置留空占位）
-├─ md-viewer.html       # 离线单文件产物：内置文档数据 + 内联的思维导图引擎，双击即可看
+├─ md-viewer.html       # 离线单文件产物：内置文档数据 + 内联的导图/图表引擎，双击即可看
 ├─ index.html           # 实时版产物：引擎改成本地外链、快照置空，--serve 时自动生成（已在 .gitignore）
 ├─ assets/             # 页面的样式与应用逻辑（改动页面看这里，不用碰 html）
 │  ├─ viewer.css       #   全部样式
 │  ├─ mindmap-core.js  #   Mermaid mindmap 解析（纯函数，可单测）
+│  ├─ mermaid-core.js  #   嵌入图表的围栏识别/版式判定/块标记（纯函数，可单测）
 │  ├─ md-core.js       #   Markdown 渲染器
-│  └─ md-app.js        #   应用逻辑（侧栏、路由、导图视图、导出…）
+│  └─ md-app.js        #   应用逻辑（侧栏、路由、导图视图、图表渲染、导出…）
 ├─ build-docs.mjs      # 构建 / 本地服务脚本（把模板填成上面两个产物）
-├─ config.json         # 配置文件（标题、首页说明、左栏显示范围、思维导图…）—— 你主要改这个
+├─ config.json         # 配置文件（标题、首页说明、左栏显示范围、思维导图、图表…）—— 你主要改这个
 ├─ docs-index.json     # 生成的文档索引（实时模式用）
 ├─ vendor/markmap/     # 思维导图渲染引擎（markmap + d3，MIT），构建时内联或外链到页面
+├─ vendor/mermaid/     # 嵌入图表的渲染引擎（mermaid，MIT），离线版按需内联、实时版本地外链
 ├─ docs/               # 默认被浏览的文档（示例内容，可以整个换掉）
 │  ├─ 指南/
 │  └─ 示例/
@@ -117,109 +119,13 @@ markdown-docs-helper/
 
 # 页面操作
 
-| 操作 | 方式 |
-| --- | --- |
-| 开关左侧目录栏 | 工具栏最左侧按钮，或快捷键 `[`，或左栏右上角 `✕` |
-| 开关右侧目录栏 | 工具栏最右侧按钮，或快捷键 `]`，或右栏右上角 `✕` |
-| 搜索 | 左栏搜索框（文件名 + 全文），快捷键 `/` 聚焦，`Esc` 清除 |
-| 打开文档 | 点左栏条目、点首页卡片，或直接点正文里 `docs/xxx.md` 形式的引用 |
-| 跳转章节 | 点正文里的 `§5.3` 这类引用，或点右栏目录 |
-| 上一篇 / 下一篇 | 工具栏按钮（顺序与左栏一致） |
-| 切换深/浅色 | 工具栏「深色/浅色」按钮（跟随系统偏好，且记住选择） |
-| 打印 / 导出 PDF | 工具栏「打印」，或 `Ctrl+P` → 目标选「另存为 PDF」 |
-| 复制当前文档链接 | 工具栏「链接」（链接带文档与章节位置，可直接发给别人） |
-| 导图全页面显示 | 导图工具栏「全屏」按钮：把导图铺满整个浏览器窗口，再点一次或按 `Esc` 还原（`F11` 也能叠加使用） |
-
-侧栏的开关状态会记住（默认开启记忆，可在 `config.json` 里关掉）。窄屏/手机上两侧栏变成抽屉，
-默认都收起，点工具栏按钮滑出，点空白处或 `✕` 收起。
+页面上的按钮、键鼠操作、快捷键，以及实时版与离线快照版的差别，见
+[`docs/指南/界面与快捷键.md`](docs/指南/界面与快捷键.md)。
 
 # config.json 配置说明
 
-配置文件里**允许写 `//` 与 `/* */` 注释，也允许尾随逗号**，随便加说明。写错了不要紧：页面首页会显示红色提示，并自动退回默认设置（不会白屏）。
-
-## 顶部与首页
-
-| 字段 | 默认值 | 说明 |
-| --- | --- | --- |
-| `title` | `"Markdown 文档浏览器"` | 顶栏主标题 |
-| `subtitle` | `""` | 顶栏副标题（窄屏自动隐藏） |
-| `home.title` | `"文档索引"` | 首页大标题，设为 `""` 则不显示 |
-| `home.intro` | `""` | 首页引导语，**支持 Markdown**；留空则不显示这一段 |
-| `home.showCards` | `true` | 首页是否显示文档卡片列表 |
-
-`home.intro` 里写 `docs/示例/快速开始.md` 会自动变成可点击的跳转链接，例如：
-
-```jsonc
-"home": {
-  "title": "文档索引",
-  "intro": "## 使用须知\n\n本页只读展示，不改文档。\n\n- 左栏：`[` 开关\n- 详细说明见 `docs/指南/快速开始.md`",
-  "showCards": true
-}
-```
-
-## 左侧目录栏
-
-| 字段 | 默认值 | 说明 |
-| --- | --- | --- |
-| `sidebar.title` | `"文档目录"` | 左栏标题 |
-| `sidebar.defaultOpen` | `false` | 默认是否展开（窄屏一律默认收起） |
-| `sidebar.remember` | `true` | 是否记住上次的开关状态 |
-| `sidebar.showSearch` | `true` | 是否显示搜索框 |
-| `sidebar.showCounts` | `true` | 分组名右侧是否显示篇数 |
-| `sidebar.folders` | `[]` | 只显示列出的目录，并按此顺序排列；**空数组 = 显示全部目录** |
-| `sidebar.exclude` | `[]` | 额外排除的目录前缀或单个文件路径 |
-| `sidebar.order` | `[]` | 让指定文档排在前面（按数组顺序） |
-| `sidebar.docs` | `{}` | 单篇覆盖：隐藏某篇，或改它的显示标题（都不动 md 文件） |
-
-`folders` 的两种写法（`label` 是显示名，可随意改成中文）：
-
-```jsonc
-"folders": [
-  { "dir": "docs/指南", "label": "指南" },
-  { "dir": "docs/示例", "label": "示例" }
-]
-```
-
-单篇隐藏与改名：
-
-```jsonc
-"docs": {
-  "docs/示例/表格与代码.md": { "hidden": true },          // 不在左栏与首页出现
-  "docs/指南/快速开始.md": { "title": "改过的显示名" }     // 只改显示标题
-}
-```
-
-被 `hidden` 隐藏的文档**仍然可以通过正文里的 `docs/xxx.md` 引用打开**（只是不列出来、搜索结果里也不出现）。
-
-## 右侧目录栏与阅读区
-
-| 字段 | 默认值 | 说明 |
-| --- | --- | --- |
-| `toc.title` | `"本篇目录"` | 右栏标题 |
-| `toc.defaultOpen` | `true` | 默认是否展开（当前默认：只开右侧栏） |
-| `toc.remember` | `true` | 是否记住上次的开关状态 |
-| `toc.maxDepth` | `4` | 右上目录收录到几级标题（`2` 只到二级，`3` 到三级，`4` 最多四级） |
-| `reading.maxWidth` | `920` | 正文最大宽度（像素）。嫌一行太长就调小，嫌窄就调大 |
-
-## 思维导图（`.mermaid`）
-
-| 字段 | 默认值 | 说明 |
-| --- | --- | --- |
-| `mindmap.enabled` | `true` | 总开关。设成 `false` 后 `.mermaid` 只当普通文本显示，左栏也不再标「导图」 |
-| `mindmap.extensions` | `[".mermaid"]` | 哪些后缀按思维导图渲染（写 `"mermaid"` 或 `".MERMAID"` 都认） |
-| `mindmap.initialExpandLevel` | `2` | 打开时展开到第几层：`1` 只展开一级分支，`2` 再展开一层，`0` 全部展开，`-1` 全部折叠 |
-| `mindmap.showOutline` | `true` | 右栏是否显示导图大纲（可点击定位、点三角折叠） |
-| `mindmap.exportImage` | `true` | 是否显示导图工具栏上的 SVG / PNG 导出按钮 |
-
-```jsonc
-"mindmap": {
-  "enabled": true,
-  "extensions": [".mermaid"],
-  "initialExpandLevel": 2,
-  "showOutline": true,
-  "exportImage": true
-}
-```
+标题、首页说明、左栏显示范围、右栏层级、思维导图等全部字段的默认值与示例，见
+[`docs/指南/配置说明.md`](docs/指南/配置说明.md)。（配置写在工程根的 `config.json`，支持 `//` 注释与尾随逗号。）
 
 # 思维导图（Mermaid mindmap）
 
@@ -247,15 +153,8 @@ mindmap
       CT：设备节拍，核心验收指标
 ```
 
-| 操作 | 方式 |
-| --- | --- |
-| 缩放 / 平移 | 滚轮缩放、拖拽平移；双击画布或点「适应」回到合适大小 |
-| 折叠 / 展开节点 | 点节点本身（也可以直接点图上的小圆圈） |
-| 整体折叠 / 展开 | 工具栏「折叠」按钮 |
-| 跳到大纲某项 | 点右栏「导图大纲」里的条目（会展开路径并把该节点移到视野中） |
-| 只折叠某个分支 | 点大纲条目前面的小三角（▾ / ▸） |
-| 导出图片 | 工具栏「SVG」或「PNG」（PNG 会按当前主题带底色） |
-| 打印 / 导出 PDF | 工具栏「打印」——导图会整体输出，不是只打印可视区域 |
+画布上的操作（缩放 / 平移、折叠、跳大纲、导出图片、全屏、打印）见
+[`docs/指南/界面与快捷键.md`](docs/指南/界面与快捷键.md) 的「思维导图操作」。
 
 语法支持范围（按 Mermaid 的 `mindmap` 版式实现）：
 
@@ -265,30 +164,72 @@ mindmap
 - **`%%` 注释与 `%%{init: …}%%` 指令**会被跳过；`mindmap` 声明行可有可无。
 - **行内格式**：节点文字支持 Markdown 行内语法（粗体、行内代码等），但会被安全转义，
   所以节点里写 `#10`、`a*b*c` 这类内容不会破坏排版。
-- 只支持 `mindmap` 一种图；其它 Mermaid 图（flowchart / sequence 等）会按纯文本显示。
+- `.mermaid` 文件里写的**不是** `mindmap`（比如 `stateDiagram-v2`）时，改由下面的
+  嵌入图表引擎按整篇图表渲染，左栏标记也从「导图」变成「图表」。
 
 > 渲染引擎是 [markmap](https://github.com/markmap/markmap)（MIT），已放在 `vendor/markmap/`，
 > 由 `node build-docs.mjs` 填进页面：离线版整段内联，实时版走本地外链。升级方式见 `vendor/markmap/README.md`。
 
-# 数据来源：快照模式与实时模式
+# 嵌入 Mermaid 图表（```mermaid 围栏）
 
-| 打开方式 | 页面 | 数据来源 | 改了文档/配置之后 |
-| --- | --- | --- | --- |
-| `--serve` 实时模式（`http://127.0.0.1:8899/`，加 `--lan` 可给局域网内其它机器看） | `index.html` | 直接读文档目录下的文档与 `config.json` | **刷新页面即可**，新增文档也不用重建 |
-| 双击 `md-viewer.html`（`file://`） | `md-viewer.html` | 页面内置的文档（`.md` + `.mermaid`）与配置副本 | 跑一次 `node build-docs.mjs`，再刷新页面 |
+Markdown 正文里用 ` ```mermaid ` 围栏包住 Mermaid 源码，页面就会把它画成 SVG，
+和 `.mermaid` 思维导图一样**离线可用、不装插件、不联网**。
 
-两个页面都由 `page.template.html` 生成，结构完全一致，只有两处不同：
-实时版把三段引擎换成本地外链 `<script src="vendor/markmap/*.js">`（浏览器可缓存），并把内置快照置空
-（实时模式每次刷新都去读 `docs-index.json`，留一份旧副本只会误导）。
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> IDLE
+    state "空闲：等待启动" as IDLE
+    state "运行中" as RUN
+    IDLE --> RUN : start
+    RUN --> IDLE : stop
+    RUN --> [*] : 完成
+```
 
-页面底部（左栏最下方）与首页那行小字会写明当前是「实时读取 docs/」还是「离线快照（时间）」，
-避免把旧内容当成最新。`node build-docs.mjs --check` 可以判断产物是否已过期，适合接在提交前检查里；
-不确定差在哪时用 `node test/why-stale.mjs` 会把差异逐条列出来。
+- 支持的版式：`stateDiagram-v2` / `stateDiagram`、`flowchart`、`sequenceDiagram`、
+  `classDiagram`、`erDiagram`、`gantt`、`pie`、`journey`、`gitGraph`、`timeline`、
+  `quadrantChart`、`requirementDiagram`、`mindmap`、`C4`、`sankey-beta` 等——凡是引擎认的都能画。
+- 围栏写法：`` ```mermaid ``、`` ~~~mermaid ``、`` ```{.mermaid} `` 都认，大小写不敏感，附加信息串
+  （`` ```mermaid title="x" ``）忽略；`` ```mermaidfoo `` 这类不算。
+- 每张图右上角有工具栏：**源码**（就地摊开/收起）、**复制**、**SVG**（导出成文件）、**全屏**
+  （铺满窗口，<kbd>Esc</kbd> 退出）。语法写错时不会白屏：显示一条含 Mermaid 报错的提示，
+  下面自动摊开源码，同一篇文档里其它图表不受影响。
+- 主题跟随页面深浅色（切主题会重画；mermaid 的主题是画进 SVG 里的）。
+- 引擎是 [mermaid](https://github.com/mermaid-js/mermaid)（MIT），放在 `vendor/mermaid/`。
+  **离线版按需内联**：这批文档里没有任何 ` ```mermaid ` 围栏、也没有整篇图表的 `.mermaid`
+  文件时，`md-viewer.html` 不会背上这 3 MB（仍是 1 MB 上下），页面里留一个空引擎块兜底；
+  实时版始终走本地外链。升级方式见 `vendor/mermaid/README.md`。
+
+相关配置（`config.json` 的 `mermaid` 段，详见 [`docs/指南/配置说明.md`](docs/指南/配置说明.md)）：
+
+```json
+"mermaid": {
+  "enabled": true,             // false：围栏退回普通代码块，离线版也不再内联引擎
+  "theme": "auto",             // auto 跟随页面深浅色，也可写 default/dark/forest/neutral/base
+  "style": "doc",              // doc：文档风（圆角浅紫胶囊 + 深灰粗连线 + 灰底标签）；plain：mermaid 原样
+  "securityLevel": "strict",   // strict 转义标签里的 HTML；文档可信时才改 loose（可用 <br/>）
+  "controls": true,            // 图上的工具栏
+  "exportImage": true,         // 工具栏里的「SVG」按钮
+  "fullscreen": true           // 工具栏里的「全屏」按钮
+}
+```
+
+可运行的示例见 [`docs/示例/Mermaid 图表.md`](docs/示例/Mermaid%20图表.md)（各类版式 + 故意写错的兜底），
+整篇图表见 [`docs/示例/状态机示例.mermaid`](docs/示例/状态机示例.mermaid)，
+样式对照见 [`docs/示例/状态图版式对照.md`](docs/示例/状态图版式对照.md)。
+
+# 实时模式与离线快照
+
+`--serve` 实时模式读文档目录原文（刷新即生效），双击 `md-viewer.html` 读页面内置快照（改完要重跑
+`node build-docs.mjs`）。两种页面的差别、页面上的「数据来源」提示，以及产物过期检查
+（`node build-docs.mjs --check`、`node test/why-stale.mjs`）见
+[`docs/指南/界面与快捷键.md`](docs/指南/界面与快捷键.md)。
 
 # 支持的 Markdown
 
 ATX 标题、段落、围栏与缩进代码块、引用（含嵌套）、有序/无序/任务列表（含多层嵌套）、
 GFM 表格（含对齐、转义竖线、行内代码）、水平线、行内 `code`/粗体/斜体/删除线/链接/图片/自动链接。
+信息串为 `mermaid` 的围栏会画成图（见上面的「嵌入 Mermaid 图表」），其余围栏按代码高亮样式原样输出。
 
 **不解析原始 HTML**（按纯文本转义输出），避免文档里混入脚本；正文里的 `</script>` 会被转义成 `\u003c`，
 不会提前闭合页面脚本标签。样式与应用逻辑都在同目录的 `assets/` 下，页面没有任何外部（跨目录、跨站）请求。
@@ -328,20 +269,7 @@ GFM 表格（含对齐、转义竖线、行内代码）、水平线、行内 `co
 
 # 测试与调试脚本
 
-`test/` 下是一组回归与排查脚本，纯 Node 的几个不需要浏览器：
-
-```
-npm test                     # 渲染器 + 思维导图解析 + 产物完整性 + 页面自检 + 实时服务冒烟（含只读核对）
-node test/verify-mindmap.mjs # 只要思维导图解析回归（.mermaid → 树 / Markdown / 大纲）
-node test/serve-host.mjs     # 监听地址回归：默认只听环回、--lan 绑所有网卡、--host 指哪绑哪
-node test/ui-verify.mjs      # 界面回归（要能启动无头 Chrome）
-node test/mindmap-ui.mjs     # 思维导图界面回归：真的渲染出节点、折叠、大纲、全屏、导出、深色主题
-node test/xref-ui.mjs        # 跨文档章节引用界面回归：真跳转、徽标、missing 降级（要能启动无头 Chrome）
-node test/shot-anim.mjs      # 侧栏动画/粘性/横向溢出的量化抽查 + 截图
-node test/why-stale.mjs      # --check 说过期时，逐条列出差异
-```
-
-详见 `test/README.md`。
+详见 `docs/指南/测试与调试脚本.md`。
 
 # 常见问题
 
@@ -358,8 +286,23 @@ node test/why-stale.mjs      # --check 说过期时，逐条列出差异
 
 **启动后看不到我想看的目录？**
 先看脚本启动时打印的 `文档目录：` 一行（命令行指定过的话会标注「命令行指定」），
-它才是真正被扫描的目录；端口被占用时脚本会自动往后找端口，所以请以打印的
+它才是真正被扫描的目录；端口被占用或绑不上时脚本会自动往后找端口，所以请以打印的
 `本机访问：http://127.0.0.1:xxxx/` 为准，别打开上一次遗留的旧服务。
+
+**`--port 9001` 报「没有权限绑定 / EACCES」？**
+端口没被系统占用，也可能绑不上：Windows 上**别的程序独占监听**该端口时，第二次 `bind`
+返回的就是 `EACCES`（`WSAEACCES 10013`），而不是 `EADDRINUSE`——所以「小于 1024 需要
+管理员权限」的说法对 9001 这种端口并不成立。现在脚本把这种 `EACCES` 也当成「端口用不了」，
+自动往后顺延并在启动信息里打印真实端口；想知道是谁占着，可以自己查：
+
+```
+netstat -ano | findstr :9001                                  # 看那一行的 PID 是哪个程序
+netsh interface ipv4 show excludedportrange protocol=tcp      # 看系统预留（Hyper-V/WSL/Docker）的端口段
+tasklist | findstr <PID>                                      # Windows 上由 PID 反查程序名
+```
+
+（实测：`mosquitto` 占着 `0.0.0.0:9001` 时，`node build-docs.mjs --serve --port 9001`
+报的就是 `EACCES`。换个端口，或停掉那个程序即可。）
 
 **怎么让同事也能看这些文档？**
 用 `node build-docs.mjs --serve --lan` 起服务，把启动信息里的
@@ -378,13 +321,32 @@ node test/why-stale.mjs      # --check 说过期时，逐条列出差异
 不能，本工具是只读的。编辑请直接用你的 Markdown 编辑器改文档目录下的文件。
 
 **为什么目录里的 pptx / xlsx 不显示？**
-本工具只处理 Markdown（`.md`）与思维导图（`.mermaid`）；其他文件会被忽略，左栏底部会显示忽略的数量。
+本工具只处理 Markdown（`.md`）与思维导图 / 图表（`.mermaid`）；其他文件会被忽略，左栏底部会显示忽略的数量。
+
+**```mermaid 围栏只显示成代码块，没画成图？**
+先看 `config.json` 里 `mermaid.enabled` 是不是 `false`（关掉时围栏就是普通代码块，这是刻意行为）。
+是 `true` 却还没画，多半是双击模式的页面还没重建：改文档或配置后要重跑 `node build-docs.mjs`；
+实时模式刷新即可。另外确认那一段确实用了 ```mermaid 围栏（` ```mindmap ` 这种信息串不算）。
+
+**某张图显示「这张 Mermaid 图没能画出来」？**
+Mermaid 自己的语法错误，提示里带了行号，源码已自动摊开——照着改那段源码即可，同一篇文档里
+其它图表不受影响。想核对写法，看 `docs/示例/Mermaid 图表.md` 里各类版式的例子。
+
+**图表里的 `<br/>` 没换行？**
+`securityLevel` 默认 `strict`，标签里的 HTML 会被转义（与「正文不解析原始 HTML」一致）。
+确实要用 `<br/>` 时，把 `config.json` 的 `mermaid.securityLevel` 改成 `loose`（文档可信的前提下）。
+
+**离线单文件怎么突然大了 3 MB？**
+`md-viewer.html` 的图表引擎是**按需内联**的：这批文档里有 ```mermaid 围栏（或整篇图表的
+`.mermaid`）时才把 `vendor/mermaid/mermaid.min.js` 写进页面。所以把示例文档挪出文档目录再重建，
+体积就会回到 1 MB 上下；`mermaid.enabled = false` 也能去掉它。
 
 **思维导图没渲染出来 / 左栏没有「导图」标记？**
 先确认后缀是 `.mermaid`（或在 `config.json` 的 `mindmap.extensions` 里加上你的后缀），
 再看 `mindmap.enabled` 是不是 `false`。双击模式下改完配置要重跑 `node build-docs.mjs`。
 如果导图区域显示了红色提示，说明文件里没解析出节点——检查层级是否靠缩进（`tab` 记 4 个空格），
 并且不要写 ```mermaid 代码围栏。
+（另外：`.mermaid` 里写的是 `stateDiagram-v2` 这类版式时，会按「图表」渲染，左栏标记是「图表」而不是「导图」。）
 
 **导图太挤 / 字被截断？**
 节点文字按 `maxWidth`（320px）折行。导图整体很宽时先点「适应」，或折叠掉不需要的分支再看。
@@ -397,7 +359,7 @@ node test/why-stale.mjs      # --check 说过期时，逐条列出差异
 
 - **为什么把文档内嵌进 HTML**：`file://` 页面无法 `fetch`/XHR 本地文件，也无法列目录，
   所以双击模式必须把数据写进页面；`--serve` 模式才实时读文件。页面布局只维护
-  `page.template.html` 一份，`build-docs.mjs` 把四处空占位（两段 JSON 数据 + 三个引擎块）
+  `page.template.html` 一份，`build-docs.mjs` 把四处空占位（两段 JSON 数据 + 四个引擎块）
   填成两个产物：离线版内联、实时版外链。除此之外模板一字不改。
 - **为什么把样式和逻辑放在 `assets/`**：页面本体只留结构与内置数据，改样式/逻辑直接编辑
   `assets/viewer.css`、`assets/md-app.js` 等文件，刷新即生效，不用在两千多行的 HTML 里翻。
@@ -409,12 +371,18 @@ node test/why-stale.mjs      # --check 说过期时，逐条列出差异
   `<script id="vendor-…">` 块（顺序不能改：d3 必须在前，view 是 `(this.markmap, d3)` 形式的 IIFE）。
   代价是 `md-viewer.html` 大了约 950 KB，换来的是双击即可离线看导图；实时版没这个限制，
   所以走外链，`index.html` 只有几 KB。两个页面都不引用任何互联网资源。
+  嵌入图表的 `vendor/mermaid/mermaid.min.js` 有 3.2 MB，太大，所以**按需内联**：这批文档里
+  用到了 Mermaid 图表才写进页面，否则只留一个标了 `data-unused="1"` 的空块；
+  页面侧统一用「`window.mermaid` 在不在」判断，缺引擎时围栏就是普通代码块，不会白屏。
+- **嵌入图表为什么也自己写解析层**：围栏识别、版式判定、块标记放在
+  `assets/mermaid-core.js`（纯函数、可单测），构建脚本用 `vm` 把同一份源码读进来判断
+  「要不要内联引擎」——判定规则只有一份，页面与构建永远一致。渲染本身完全交给 mermaid，
+  页面只做排队（一张张画，顺序稳定）、成败兜底（错误框 + 源码）、主题重画与工具栏。
 - **导图与大纲怎么保持同步**：markmap 渲染前会把数据深拷贝成自己的 INode 树，它写的 `fold`
   回不到我们的树。因为两棵树形状必然一致（同一份 `.mermaid`、同序前序遍历，节点数相同），
   所以按**前序遍历序号**对应，而不是按文字比对（markmap 的节点文字是 HTML、中文还被转成
   `&#x…;` 实体，比对很容易踩坑）。画布点击后再把 fold 回写到大纲。
 - **只读怎么保证**：`assertInsideRoot()` 拒绝写出工程之外，也拒绝写进文档目录；
   渲染器不解析原始 HTML（导图节点文字也做 Markdown 转义）；页面本身没有任何写文件能力。
-- **侧栏动画**：左栏用 `margin-left` 负值滑出（左向溢出不产生横向滚动条），
-  右栏收窄自身宽度并裁剪内层（内层保持原宽，文字不重排）；右栏的纵向滚动下沉到内层列表，
-  避免滚动条裁掉固定宽度的内容。首屏用 `html.preload` 关掉过渡，避免加载时侧栏"滑一下"。
+- **侧栏动画**：左栏负外边距滑出、右栏收窄裁剪，都不重排正文；细节见
+  [`docs/指南/界面与快捷键.md`](docs/指南/界面与快捷键.md) 的「侧栏开关的实现要点」。

@@ -396,6 +396,68 @@ html.mm-full-on,html.mm-full-on body{overflow:hidden}
 .mm-o.lv4 .mm-o-item{padding-left:46px}
 .mm-o.lv5 .mm-o-item{padding-left:60px}
 
+/* ============ 嵌入的 Mermaid 图表（Markdown 里的 ```mermaid 围栏） ============ */
+.mg-block{
+  margin:1.2em 0; border:1px solid var(--border); border-radius:var(--radius);
+  background:var(--bg-elev); box-shadow:var(--shadow);
+  transition:border-color .18s var(--ease), box-shadow .22s var(--ease);
+}
+.mg-block:hover{border-color:var(--border-soft)}
+.mg-bar{
+  display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+  padding:6px 8px 6px 12px;
+  background:var(--bg-soft); border-bottom:1px solid var(--border-soft);
+  border-radius:var(--radius) var(--radius) 0 0;
+}
+.mg-kind{font-size:12.5px; font-weight:600; color:var(--fg-muted); white-space:nowrap}
+.mg-grow{flex:1 1 auto}
+.mg-bar .btn{height:26px; padding:0 8px; font-size:12px}
+/* 图表区：宽图横向滚动，不挤压页面；SVG 自己按 max-width 缩放到容器宽度 */
+.mg-body{
+  padding:10px 12px; overflow-x:auto;
+  scrollbar-width:thin; scrollbar-color:var(--border) transparent;
+}
+.mg-body::-webkit-scrollbar{height:10px}
+.mg-body::-webkit-scrollbar-thumb{background:var(--border); border-radius:6px}
+.mg-host{display:flex; justify-content:center; min-height:0}
+.mg-host>svg{max-width:100%; height:auto; display:block}
+/* 源码默认收起来；渲染成功、点了「源码」或渲染失败时才摊开 */
+.mg-body>pre.code{margin:0}
+.mg-block:not(.mg-show-src) .mg-body>pre.code{display:none}
+.mg-block.mg-show-src .mg-body>pre.code{margin-top:10px}
+.mg-block[data-mg-state="empty"] .mg-host,
+.mg-block[data-mg-state="no-engine"] .mg-host{display:none}
+/* 还没画完（含排队等前面的图）：给个骨架提示，别让用户在空白里等 */
+.mg-block[data-mg-state="pending"] .mg-body>pre.code,
+.mg-block[data-mg-state="loading"] .mg-body>pre.code{display:none}
+.mg-block[data-mg-state="pending"] .mg-host,
+.mg-block[data-mg-state="loading"] .mg-host{
+  min-height:90px; display:flex; align-items:center; justify-content:center;
+  color:var(--fg-muted); font-size:13px;
+}
+.mg-block[data-mg-state="pending"] .mg-host::after,
+.mg-block[data-mg-state="loading"] .mg-host::after{content:"正在画图…"}
+.mg-error{
+  display:flex; flex-direction:column; gap:4px; width:100%;
+  padding:10px 14px; font-size:13.5px; line-height:1.7;
+  border:1px solid #d4a72c; border-radius:var(--radius); background:#fff8e1; color:#7a5c00;
+}
+html[data-theme="dark"] .mg-error{border-color:#9e6a03; background:#2a2008; color:#e3b341}
+.mg-error-msg{font-family:var(--font-mono); font-size:12.5px; word-break:break-word}
+.mg-error-hint{opacity:.85}
+/* 图表块的全屏：铺满窗口，长图在里面的滚动条里看 */
+.mg-block.mg-full{
+  position:fixed; inset:0; z-index:60; margin:0; border:0; border-radius:0;
+  display:flex; flex-direction:column; background:var(--bg); box-shadow:none;
+}
+.mg-block.mg-full .mg-bar{border-radius:0}
+.mg-block.mg-full .mg-body{
+  flex:1 1 auto; min-height:0; overflow:auto; display:flex; align-items:center; justify-content:center;
+  padding:16px;
+}
+.mg-block.mg-full .mg-host>svg{max-width:none}
+html.mg-full-on,html.mg-full-on body{overflow:hidden}
+
 /* ============ 窄屏遮罩 ============ */
 #scrim{display:none; position:fixed; inset:52px 0 0; background:rgba(0,0,0,.4); z-index:30}
 
@@ -479,6 +541,15 @@ html.mm-full-on,html.mm-full-on body{overflow:hidden}
   .mm-bar,.mm-hint{display:none !important}
   .mm-stage{border:0; box-shadow:none; overflow:visible; page-break-inside:avoid; break-inside:avoid}
   .mm-canvas{width:100% !important; height:auto !important; max-height:none}
+  /* 打印嵌入的 Mermaid 图：工具栏不印，全屏视图退回普通文档流，整张图别被切开 */
+  .mg-bar{display:none !important}
+  .mg-block{break-inside:avoid; page-break-inside:avoid; box-shadow:none; border-color:#bbb}
+  .mg-block.mg-full{position:static; inset:auto; display:block; background:none}
+  .mg-block.mg-full .mg-body{overflow:visible; padding:0}
+  .mg-body{overflow:visible !important; padding:0}
+  .mg-host>svg{max-width:100% !important; height:auto !important}
+  .mg-block .mg-body>pre.code{display:none !important}
+  .mg-error{border-color:#bbb; background:none; color:#000}
   .intro{border:1px solid #bbb; background:none}
   @page{margin:15mm}
 }

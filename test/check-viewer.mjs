@@ -35,8 +35,8 @@ if (!fs.existsSync(VIEWER)) { console.log('FAIL 找不到 md-viewer.html，先�
 const tpl = fs.readFileSync(TEMPLATE, 'utf8');
 const html = fs.readFileSync(VIEWER, 'utf8');
 
-/* 页面外链的资源（自研代码）：CSS + 三段脚本 */
-const ASSET_FILES = ['viewer.css', 'mindmap-core.js', 'md-core.js', 'md-app.js'];
+/* 页面外链的资源（自研代码）：CSS + 四段脚本 */
+const ASSET_FILES = ['viewer.css', 'mindmap-core.js', 'mermaid-core.js', 'md-core.js', 'md-app.js'];
 const assetPath = (f) => path.join(ASSETS, f);
 const assetText = (f) => fs.readFileSync(assetPath(f), 'utf8');
 /* 关键钩子可能落在模板里，也可能落在 assets/ 的脚本里，合并起来找 */
@@ -50,14 +50,15 @@ const tplScriptOpen = (tpl.match(/<script[ >]/g) || []).length;
 const tplScriptClose = (tpl.match(/<\/script>/g) || []).length;
 tplScriptOpen === tplScriptClose ? ok(`<script> ${tplScriptOpen} 对`) : fail(`<script> ${tplScriptOpen}/${tplScriptClose}`);
 
-/* 模板里四个占位块必须是空块：数据由构建写入，引擎由构建填内联或外链 */
-for (const id of ['viewer-config', 'docs-snapshot', 'vendor-d3', 'vendor-markmap-lib', 'vendor-markmap-view']) {
+/* 模板里的占位块必须是空块：数据由构建写入，引擎由构建填内联或外链 */
+const PLACEHOLDERS = ['viewer-config', 'docs-snapshot', 'vendor-d3', 'vendor-markmap-lib', 'vendor-markmap-view', 'vendor-mermaid'];
+for (const id of PLACEHOLDERS) {
   const m = new RegExp(`<script id="${id}"([^>]*)>([\\s\\S]*?)</script>`).exec(tpl);
   if (!m) { fail(`模板缺少占位块 <script id="${id}">`); continue; }
   m[2].trim() === '' ? ok(`模板占位块 ${id} 是空的（由构建填充）`) : fail(`模板占位块 ${id} 里不该有内容`);
 }
 /* 实时版的外链写法必须与模板占位块 id 一一对应，构建才知道怎么换 */
-for (const id of ['vendor-d3', 'vendor-markmap-lib', 'vendor-markmap-view']) {
+for (const id of PLACEHOLDERS.filter((x) => x.startsWith('vendor-'))) {
   tpl.includes(`<script id="${id}">`) ? ok(`模板里 ${id} 占位写法规范`) : fail(`模板里 ${id} 占位写法不规范`);
 }
 
@@ -67,7 +68,7 @@ for (const f of ASSET_FILES) {
 }
 tpl.includes('<link rel="stylesheet" href="assets/viewer.css">')
   ? ok('模板外链 assets/viewer.css') : fail('模板没有外链 assets/viewer.css');
-for (const id of ['mindmap-core', 'md-core', 'md-app']) {
+for (const id of ['mindmap-core', 'mermaid-core', 'md-core', 'md-app']) {
   tpl.includes(`<script id="${id}" src="assets/${id}.js"></script>`)
     ? ok(`模板外链 assets/${id}.js`) : fail(`模板没有外链 assets/${id}.js`);
 }
@@ -81,13 +82,20 @@ for (const id of ['viewer-config', 'docs-snapshot']) {
   try { JSON.parse(m[1]); ok(`${id}（JSON 可解析）`); }
   catch (e) { fail(`${id} JSON 解析失败：${e.message}`); }
 }
-for (const id of ['vendor-d3', 'vendor-markmap-lib', 'vendor-markmap-view']) {
-  const m = new RegExp(`<script id="${id}">([\\s\\S]*?)</script>`).exec(html);
-  if (!m) { fail(`产物缺少内联引擎块 ${id}`); continue; }
-  m[1].length > 10000 ? ok(`${id} 已整段内联（${(m[1].length / 1024 | 0)} KB）`) : fail(`${id} 是空块，离线版会渲染不出思维导图`);
-  !/<\/script/i.test(m[1]) ? ok(`${id} 块内没有裸的 </script`) : fail(`${id} 块内出现了裸的 </script`);
+/* 引擎块：内联（大块源码）或按需留空（data-disabled / data-unused），两者都必须无裸 </script */
+for (const id of PLACEHOLDERS.filter((x) => x.startsWith('vendor-'))) {
+  const m = new RegExp(`<script id="${id}"([^>]*)>([\\s\\S]*?)</script>`).exec(html);
+  if (!m) { fail(`产物缺少引擎块 ${id}`); continue; }
+  if (/data-(disabled|unused)="1"/.test(m[1])) {
+    const why = /data-disabled/.test(m[1]) ? 'config 关掉了该功能' : '这批文档没用到该功能';
+    m[2].trim() === '' ? ok(`${id} 按需未内联（${why}）`)
+      : fail(`${id} 标了按需未内联，块里却还有内容`);
+    continue;
+  }
+  m[2].length > 10000 ? ok(`${id} 已整段内联（${(m[2].length / 1024 | 0)} KB）`) : fail(`${id} 是空块，离线版会渲染不出图`);
+  !/<\/script/i.test(m[2]) ? ok(`${id} 块内没有裸的 </script`) : fail(`${id} 块内出现了裸的 </script`);
 }
-for (const id of ['mindmap-core', 'md-core', 'md-app']) {
+for (const id of ['mindmap-core', 'mermaid-core', 'md-core', 'md-app']) {
   html.includes(`<script id="${id}" src="assets/${id}.js"></script>`)
     ? ok(`产物外链 assets/${id}.js`) : fail(`产物没有外链 assets/${id}.js`);
 }
@@ -102,7 +110,8 @@ for (const [a, b, name] of [['{', '}', '花括号'], ['(', ')', '圆括号']]) {
 for (const s of ['--ease-out', 'body.left-hidden .sidebar', 'body.right-hidden .toc',
                  'visibility 0s linear var(--dur)', '.toc>*{width:calc(var(--right-w) - 1px)}',
                  'prefers-reduced-motion', 'html.preload', '.article.pop{animation:riseIn', '.toc-list{',
-                 '.mm-stage', '.mm-canvas', '.mm-o-item', '.mm.mm-full', 'html.mm-full-on']) {
+                 '.mm-stage', '.mm-canvas', '.mm-o-item', '.mm.mm-full', 'html.mm-full-on',
+                 '.mg-block', '.mg-bar', '.mg-host', '.mg-error', '.mg-block.mg-full', 'html.mg-full-on']) {
   css.includes(s) ? ok('含 ' + s) : fail('缺 ' + s);
 }
 
@@ -132,7 +141,10 @@ for (const s of ['function popArticle()', 'function enableMotion()', 'popArticle
                  'var MindmapCore = (function ()', 'function renderMindmapDoc(', 'function renderMindmap(',
                  'function renderMindmapOutline(', 'function exportMindmapSvg(', 'function exportMindmapPng(',
                  'function isMindmapDoc(', 'window.markmap', 'id="mmSvgEl"',
-                 'function setMindmapFullscreen(', 'function mmFullscreenOn(', 'id="mmFull"']) {
+                 'function setMindmapFullscreen(', 'function mmFullscreenOn(', 'id="mmFull"',
+                 'var MermaidCore = (function ()', 'function mountMermaid(', 'function mgRenderOne(',
+                 'function renderDiagramDoc(', 'function exportMermaidSvg(', 'function setMermaidFullscreen(',
+                 'function mermaidEnabled(', 'function usesFence(', 'function diagramKind(']) {
   allCode.includes(s) ? ok('含 ' + s) : fail('缺 ' + s);
 }
 if (/\bdochelper\b/.test(allCode)) fail('还残留 dochelper 字样（应已改为工程内相对路径）');

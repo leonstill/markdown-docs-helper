@@ -80,7 +80,19 @@
 <script id="vendor-markmap-lib"></script>
 <script id="vendor-markmap-view"></script>
 
+<!-- ==================================================================
+     嵌入图表引擎占位（vendor/mermaid/mermaid.min.js，MIT，见 vendor/mermaid/README.md）。
+     用来画 Markdown 里 ```mermaid 围栏的内容（stateDiagram-v2 / stateDiagram /
+     flowchart / 时序图 / 类图 / 甘特图…）。填法与上面的 markmap 一样：
+     离线版整段内联，实时版本地外链。
+     config.json 里 mermaid.enabled = false 时这块留空并标 data-disabled="1"，
+     页面里的 ```mermaid 围栏退回普通代码块显示。
+      ================================================================== -->
+<script id="vendor-mermaid"></script>
+
 <script id="mindmap-core" src="assets/mindmap-core.js"></script>
+
+<script id="mermaid-core" src="assets/mermaid-core.js"></script>
 
 <script id="md-core" src="assets/md-core.js"></script>
 

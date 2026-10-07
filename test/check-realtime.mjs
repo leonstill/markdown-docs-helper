@@ -3,7 +3,7 @@
  *
  * index.html 是 --serve 的默认入口，由 page.template.html 生成。它必须：
  *   · 与模板同源：外壳一致，只有「引擎写法」和「快照」两处不同
- *   · 三个引擎全是本地外链（vendor/markmap/*.js），块内不能还内联着源码
+ *   · 引擎全是本地外链（vendor/markmap/*.js、vendor/mermaid/*.js），块内不能还内联着源码
  *   · 内置快照为空（实时模式每次刷新都去 fetch docs-index.json）
  *   · 只引用工程内的本地资源，绝不出现指向互联网的 src/href —— 这是本工具的硬承诺
  *   · 引用的本地文件都真实存在（少一个文件页面就白板）
@@ -40,14 +40,23 @@ check(BUNDLES.length > 0, `从 build-docs.mjs 读到 ${BUNDLES.length} 个引擎
 
 console.log(`\n--- ${path.basename(INDEX_HTML)}（${(html.length / 1024).toFixed(1)} KB）---`);
 
-/* 1. 引擎：改成外链、且块内为空 */
+/* 1. 引擎：改成外链、且块内为空。
+      config 里关掉的引擎（mermaid.enabled = false）会留一个 data-disabled="1" 的空块。 */
 for (const b of BUNDLES) {
-  const tag = `<script id="${b.id}" src="vendor/markmap/${b.file}"></script>`;
-  check(html.includes(tag), `${b.id} 走本地外链 ${'vendor/markmap/' + b.file}`);
   const m = new RegExp(`<script id="${b.id}"([^>]*)>([\\s\\S]*?)</script>`).exec(html);
-  check(!!m && m[2].trim() === '', `${b.id} 块内没有残留内联源码`);
-  check(fs.existsSync(path.join(ROOT, 'vendor', 'markmap', b.file)),
-    `vendor/markmap/${b.file} 文件存在`);
+  check(!!m, `${b.id} 引擎块存在`);
+  if (!m) continue;
+  check(m[2].trim() === '', `${b.id} 块内没有残留内联源码`);
+  if (/data-disabled="1"/.test(m[1])) {
+    check(!/\ssrc="/.test(m[1]), `${b.id} 被 config 关掉了（无外链、留空块）`);
+    continue;
+  }
+  const em = /\ssrc="([^"]+)"/.exec(m[1]);
+  check(!!em, `${b.id} 走本地外链`);
+  if (em) {
+    check(em[1].endsWith('/' + b.file), `${b.id} 外链指向 ${b.file}（实际 ${em[1]}）`);
+    check(fs.existsSync(path.join(ROOT, em[1])), `本地引擎文件存在：${em[1]}`);
+  }
 }
 
 /* 2. 快照置空：实时模式必须依赖 docs-index.json */
@@ -66,14 +75,14 @@ check(online.length === 0, '没有任何指向互联网的 src/href', online.joi
 /* 4. 本地引用都要真实存在，否则页面白板 */
 const refs = [...html.matchAll(/(?:src|href)\s*=\s*"([^"]+)"/g)].map((m) => m[1])
   .filter((u) => !/^(data:|#|mailto:|javascript:)/i.test(u));
-check(refs.length >= 7, `外链本地资源 ${refs.length} 个（CSS + 3 引擎 + 3 自研脚本）`);
+check(refs.length >= 8, `外链本地资源 ${refs.length} 个（CSS + 4 引擎 + 4 自研脚本）`);
 for (const rel of refs) {
   check(fs.existsSync(path.join(ROOT, rel)), `本地资源存在：${rel}`);
 }
 
-/* 5. 与模板同源：把两侧的四个占位块内容抹掉后应当完全一致 */
+/* 5. 与模板同源：把两侧的占位块内容抹掉后应当完全一致 */
 const strip = (text) => text
-  .replace(/<script id="(vendor-d3|vendor-markmap-lib|vendor-markmap-view)"[^>]*>[\s\S]*?<\/script>/g, '<X>')
+  .replace(/<script id="(vendor-d3|vendor-markmap-lib|vendor-markmap-view|vendor-mermaid)"[^>]*>[\s\S]*?<\/script>/g, '<X>')
   .replace(/<script id="(viewer-config|docs-snapshot)"([^>]*)>[\s\S]*?<\/script>/g, '<X>');
 check(strip(html) === strip(tpl), '外壳与 page.template.html 完全一致（只有占位块内容不同）');
 

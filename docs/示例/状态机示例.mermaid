@@ -1,0 +1,41 @@
+%% 整篇 .mermaid 文件也可以写 mindmap 以外的版式：页面会按「图表」画出来（左栏标记也从「导图」变「图表」）
+%% 这里写的是一台设备的三段式状态机（组合状态 + 判定分支 + 注释）
+%% 提示：状态标识保持 ASCII，用 state "中文" as ID 起中文名，可读性最好
+stateDiagram-v2
+    direction LR
+
+    state "上电自检" as SELFTEST
+    state "空闲待命" as IDLE
+    state "故障" as FAULT
+    state "运行中" as RUNNING
+    state "正常上报" as ONLINE
+    state "本地缓存" as OFFLINE
+    state DECIDE <<choice>>
+
+    state RUNNING {
+        state "采集一帧" as ACQ
+        state "解算判决" as SOLVE
+        state "输出结果" as EMIT
+        [*] --> ACQ
+        ACQ --> SOLVE : 帧就绪
+        SOLVE --> EMIT : 解算完成
+        EMIT --> ACQ : 继续下一帧
+    }
+
+    [*] --> SELFTEST
+    SELFTEST --> IDLE : 自检通过
+    SELFTEST --> FAULT : 自检失败
+    IDLE --> RUNNING : start
+    RUNNING --> DECIDE : 一帧处理完
+    DECIDE --> ONLINE : 链路正常
+    DECIDE --> OFFLINE : 链路断开
+    ONLINE --> RUNNING : 继续
+    OFFLINE --> RUNNING : 继续
+    RUNNING --> IDLE : stop
+    FAULT --> IDLE : 复位
+    FAULT --> [*] : 断电
+
+    note right of OFFLINE
+        断链时先把结果落盘，
+        链路恢复后补传，不丢帧。
+    end note

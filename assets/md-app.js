@@ -28,6 +28,10 @@
     mindmap: {
       enabled: true, extensions: ['.mermaid'], initialExpandLevel: 2,
       showOutline: true, exportImage: true
+    },
+    mermaid: {
+      enabled: true, theme: 'auto', style: 'doc', securityLevel: 'strict',
+      controls: true, exportImage: true, fullscreen: true
     }
   };
 
@@ -38,7 +42,11 @@
     current: null, headings: [],
     leftOpen: false, rightOpen: true,
     /* 思维导图：当前导图、markmap 实例、大纲、折叠集合 */
-    mindmap: null, mm: null, mmOutline: [], mmFolded: []
+    mindmap: null, mm: null, mmOutline: [], mmFolded: [],
+    /* 图表文档（.mermaid 里写 stateDiagram-v2 之类）：只用来区分右栏标题 */
+    diagram: null,
+    /* 嵌入的 Mermaid 图表：渲染令牌（换文档后作废在飞的渲染）、自增 id、当前全屏的那张图 */
+    mgToken: 0, mgSeq: 0, mgFull: null, mgPromise: null, mgError: null, mgExportError: null
   };
 
   /* ---------- JSONC：允许注释与尾随逗号，方便手写 config.json ---------- */
@@ -90,6 +98,8 @@
     try { localStorage.setItem('mdv-theme', t); } catch (e) {}
     // 思维导图的配色是画上去的，换主题要按新配色重画一遍
     if (state.mindmap && state.mm) renderMindmap({ keepView: false });
+    // 嵌入的 Mermaid 图表同理：主题是画进 SVG 里的，换主题得重画
+    else rerenderMermaid();
   }
   (function initTheme() {
     var t = null;
@@ -144,7 +154,9 @@
       resolveAsset: resolveAsset,
       sectionsOf: sectionsOf,
       headings: [],
-      sectionMap: {}
+      sectionMap: {},
+      /* ```mermaid 围栏交给 mermaid-core 生成图表块；功能关掉时不传，围栏照旧当代码块 */
+      mermaid: mermaidEnabled() ? MermaidCore.make(state.cfg.mermaid) : null
     };
   }
 
@@ -236,7 +248,7 @@
     $('brandTitle').textContent = c.title || '';
     $('brandSub').textContent = c.subtitle || '';
     $('sidebarTitle').textContent = c.sidebar.title || '';
-    $('tocTitle').textContent = (state.mindmap ? '导图大纲' : c.toc.title) || '';
+    $('tocTitle').textContent = (state.mindmap ? '导图大纲' : state.diagram ? '图表' : c.toc.title) || '';
     $('searchWrap').style.display = c.sidebar.showSearch === false ? 'none' : '';
     document.title = (c.title || '文档') + (c.subtitle ? ' ' + c.subtitle : '');
   }
@@ -475,7 +487,7 @@
         html += '<a class="docitem' + (active ? ' active' : '') + '" href="' + docHref(d.path) +
           '" title="' + esc(d.path) + '">' +
           '<span class="t">' + esc(d.title) +
-          (isMindmapDoc(d) ? ' <span class="chip-mm">导图</span>' : '') + '</span>' +
+          (isMindmapDoc(d) ? ' <span class="chip-mm" title="' + esc(docKindLabel(d)) + '">' + esc(docKindLabel(d)) + '</span>' : '') + '</span>' +
           '<span class="s">' + esc(baseOf(d.path)) + '</span></a>';
       });
     });
@@ -544,7 +556,9 @@
     if (!doc) { renderOverview(); return; }
     state.current = doc;
     state.mindmap = null;                 // 离开导图：把画布拆掉，换回普通正文
+    state.diagram = null;                 // 离开图表文档同理
     exitMindmapFullscreen();             // 上一页要是全屏看的导图，这里得把滚动锁解掉
+    exitMermaidFullscreen();             // 同理：上一页全屏看的图表也要还原
     var out;
     var refs = docRefs(doc);
     try {
@@ -568,6 +582,7 @@
     $('docPath').textContent = doc.path;
     popArticle();
     document.title = doc.title + (state.cfg.subtitle ? ' ' + state.cfg.subtitle : '');
+    mountMermaid();                      // 正文里的 ```mermaid 围栏在这里画成图
 
     var maxDepth = Number(state.cfg.toc.maxDepth) || 4;
     var toc = '';
@@ -630,6 +645,17 @@
   function isMindmapDoc(doc) {
     if (!doc || !mindmapEnabled()) return false;
     return doc.kind === 'mindmap' || isMindmapPath(doc.path);
+  }
+  /* .mermaid 文件里写的其实是别的版式（stateDiagram-v2 / flowchart…）时，交给 mermaid 画，
+     不再硬按思维导图解析（那种文件在 mindmap 版式下只会报「解析失败」）。 */
+  function diagramKindOf(doc) {
+    if (!doc || !mermaidEnabled() || typeof MermaidCore === 'undefined' || !MermaidCore.diagramKind) return null;
+    return MermaidCore.diagramKind(doc.text || '');
+  }
+  /* 左栏小标记：导图（mindmap 版式）/ 图表（.mermaid 里写的其它版式） */
+  function docKindLabel(doc) {
+    if (diagramKindOf(doc)) return '图表';
+    return '导图';
   }
 
   /* 深色主题下给画布上的文字加白色描边，否则 markmap 内联样式带来的深色文字会看不清 */
@@ -1161,10 +1187,15 @@
     }
     state.current = doc;
     state.mindmap = doc;
+    state.diagram = null;
     state.headings = [];
     state.mmOutline = [];
     state.mmFolded = [];
     exitMindmapFullscreen();             // 切到另一篇导图时从普通视图重新开始
+
+    /* .mermaid 文件里写的不是 mindmap（比如 stateDiagram-v2）：交给 mermaid 画成图 */
+    var dk = diagramKindOf(doc);
+    if (dk) { renderDiagramDoc(doc, dk); return; }
 
     var chars = String(doc.text || '').length;
     applyConfig();
@@ -1185,6 +1216,415 @@
     $('prevBtn').disabled = idx <= 0;
     $('nextBtn').disabled = idx < 0 || idx >= state.visible.length - 1;
     window.scrollTo(0, 0);
+  }
+
+  /* ---------- 图表文档（.mermaid 文件里写的是 stateDiagram-v2 之类的整篇图表）----------
+     和 Markdown 里的 ```mermaid 围栏走同一套渲染：整篇文件就是一块图，
+     因此复用 mermaid-core 的块标记与工具栏，正文区只放这一块。 */
+  function renderDiagramDoc(doc, dk) {
+    state.mindmap = null;
+    state.mm = null;
+    state.diagram = doc;
+    state.headings = [];
+    state.mmOutline = [];
+    exitMindmapFullscreen();
+    exitMermaidFullscreen();
+    var opts = state.cfg.mermaid || {};
+    var chars = String(doc.text || '').length;
+    var block = MermaidCore.block(doc.text || '', 'mermaid', 1, {
+      controls: opts.controls !== false,
+      exportImage: opts.exportImage !== false,
+      fullscreen: opts.fullscreen !== false
+    });
+    applyConfig();
+    $('article').innerHTML =
+      '<div class="meta"><span>' + (doc.size ? (doc.size / 1024).toFixed(1) + ' KB' : '') + '</span>' +
+      '<span>约 ' + chars + ' 字</span>' +
+      '<span>' + esc(dk.name) + '</span>' +
+      '<span class="no-print">' + esc(doc.path) + '</span></div>' +
+      '<div class="mg-doc">' + block + '</div>';
+    $('docPath').textContent = doc.path;
+    popArticle();
+    document.title = doc.title + (state.cfg.subtitle ? ' ' + state.cfg.subtitle : '');
+    mountMermaid();
+    $('tocList').innerHTML = '<li class="toc-empty">图表文档没有标题大纲</li>';
+    renderSidebar();
+    var i = state.visible.indexOf(doc);
+    $('prevBtn').disabled = i <= 0;
+    $('nextBtn').disabled = i < 0 || i >= state.visible.length - 1;
+    window.scrollTo(0, 0);
+  }
+
+  /* ==================================================================
+     嵌入的 Mermaid 图表（Markdown 里的 ```mermaid 围栏）
+     - 识别与块标记在 mermaid-core（纯函数，可单测）
+     - 这里只负责：初始化引擎、把每块源码画成 SVG、失败兜底、
+       主题切换后重画、工具栏（源码 / 复制 / 导出 SVG / 全屏）
+     - 引擎来自 vendor/mermaid/mermaid.min.js（离线版整段内联，实时版本地外链）；
+       引擎缺失或功能被 config 关掉时，图表块不会生成 / 保持源码可见，不白屏
+     ================================================================== */
+  function mermaidCfg() { return state.cfg.mermaid || {}; }
+  function mermaidEnabled() {
+    return mermaidCfg().enabled !== false &&
+      typeof MermaidCore !== 'undefined' && !!MermaidCore && !!window.mermaid;
+  }
+  function mermaidThemeName() {
+    var t = String(mermaidCfg().theme || 'auto').toLowerCase();
+    if (!t || t === 'auto') {
+      return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
+    }
+    return t;
+  }
+  var mgInited = null;                 // 记住 initialize 用的主题，换主题才重新初始化
+
+  /* ---------- 「文档风」配色方案 ----------
+     目标：圆角浅紫胶囊 + 深紫描边 + 深灰连线 + 不透明浅灰标签底片，
+     与 mermaid 自带 default 主题的中灰块相比更像工程文档里的插图。
+     实现分两层，缺一不可：
+       · 换主题变量（themeVariables）：能改的都从变量走，mermaid 自己算对比色；
+       · 补一段 CSS 注入到这张图自己的 <style> 里：只补 mermaid 没暴露成变量的
+         形状细节（圆角半径、线宽、标签底片不透明度）。
+     注意：CSS 必须带 !important —— mermaid 生成的主题规则带 #id 前缀且会整段重写，
+     不加会被它压回去（见 assets/mermaid-core.js 里块标记的说明）。
+     边标签的 font-size / padding 一律不碰：foreignObject 的宽高是引擎按自己的字号
+     量出来的，改了就截字。字号统一交给 mermaid.fontSize 变量。 */
+  var MG_STYLE_DOC = {
+    rx: 10,               // 状态节点圆角
+    nodeW: 1.6,           // 状态节点描边
+    edgeW: 1.6,           // 状态图连线
+    markerStroke: 1.1,    // 箭头描边（原版是细长倒钩，加一点才读得成实心三角）
+    light: {
+      background: '#ffffff',
+      mainBkg: '#E7E3FB', stateBkg: '#E7E3FB', primaryColor: '#E7E3FB',
+      primaryBorderColor: '#7A6FE0', stateBorder: '#7A6FE0', nodeBorder: '#7A6FE0',
+      primaryTextColor: '#1F2328', stateLabelColor: '#1F2328', textColor: '#1F2328',
+      lineColor: '#33333A', transitionColor: '#33333A', transitionLabelColor: '#1F2328',
+      labelBackgroundColor: '#F0F0F0', edgeLabelBackground: '#F0F0F0',
+      fontSize: '15px',
+      plate: '#F0F0F0',     // 标签底片（注入 CSS 用）
+      marker: '#33333A'     // 箭头填充
+    },
+    dark: {
+      background: '#0d1117',
+      mainBkg: '#232338', stateBkg: '#232338', primaryColor: '#232338',
+      primaryBorderColor: '#8B84E8', stateBorder: '#8B84E8', nodeBorder: '#8B84E8',
+      primaryTextColor: '#e6edf3', stateLabelColor: '#e6edf3', textColor: '#e6edf3',
+      lineColor: '#9aa4b2', transitionColor: '#9aa4b2', transitionLabelColor: '#e6edf3',
+      labelBackgroundColor: '#1c2128', edgeLabelBackground: '#1c2128',
+      fontSize: '15px',
+      plate: '#1c2128',
+      marker: '#9aa4b2'
+    }
+  };
+  function mgStyleName() {
+    var s = String(mermaidCfg().style == null ? 'doc' : mermaidCfg().style).toLowerCase();
+    return (s === 'plain' || s === 'default' || s === 'none' || s === 'off') ? 'plain' : 'doc';
+  }
+  /* 当前这套图该用的主题变量：plain 时返回 null（完全走 mermaid 原样） */
+  function mgThemeVariables() {
+    if (mgStyleName() !== 'doc') return null;
+    var preset = (mermaidThemeName() === 'dark') ? MG_STYLE_DOC.dark : MG_STYLE_DOC.light;
+    var vars = { fontFamily: (getComputedStyle(document.body).fontFamily || 'sans-serif') };
+    for (var k in preset) if (Object.prototype.hasOwnProperty.call(preset, k)) vars[k] = preset[k];
+    return vars;
+  }
+  /* 渲染后往这张图自己的 <style> 里补规则（导出 SVG 时也会带上，单独打开同样好看） */
+  function mgInjectTheme(svg) {
+    if (!svg || mgStyleName() !== 'doc') return svg;
+    var id = svg.getAttribute('id') || '';
+    var sel = id ? '#' + id + ' ' : '';
+    var preset = (mermaidThemeName() === 'dark') ? MG_STYLE_DOC.dark : MG_STYLE_DOC.light;
+    var s = MG_STYLE_DOC;
+    var css = [
+      /* 状态图：节点形状与线宽 */
+      sel + '.statediagram-state rect.basic{rx:' + s.rx + 'px !important;ry:' + s.rx + 'px !important;stroke-width:' + s.nodeW + 'px !important;}',
+      sel + '.statediagram-state .title-state{rx:' + s.rx + 'px !important;ry:' + s.rx + 'px !important;}',
+      sel + '.statediagram-cluster rect.outer{rx:' + s.rx + 'px !important;ry:' + s.rx + 'px !important;}',
+      sel + '.transition{stroke-width:' + s.edgeW + ' !important;}',
+      /* 标签底片：原版 opacity .5（线会透出来），这里做成不透明浅灰。
+         注意状态图的边标签**没有** svg rect，底片是 foreignObject 里那个 div 的背景，
+         所以必须给 div 上底色；把 div 设成透明会让连线直接穿过文字。 */
+      sel + '.edgeLabel rect{fill:' + preset.plate + ' !important;opacity:1 !important;stroke:none !important;}',
+      sel + '.edgeLabel > .label > foreignObject > div,' +
+        sel + '.edgeLabel .labelBkg,' +
+        sel + '.edgeLabel p,' +
+        sel + '.edgeLabel span.edgeLabel{background:' + preset.plate + ' !important;background-color:' + preset.plate + ' !important;}' +
+        sel + '.edgeLabel > .label > foreignObject{overflow:visible !important;}',
+      /* 外层的 <g class="label"> 带 transform，盒模型撑不开它：标签底片的留白
+         由 mgPadLabels() 从测量值直接算（往 transform 里补 offset）。 */
+      /* 箭头：细长倒钩加一点描边，读起来更接近实心三角 */
+      sel + '[id$="stateDiagram-barbEnd"] path{stroke-linejoin:miter !important;stroke-width:' + s.markerStroke + ' !important;}',
+      sel + '[id$="flowchart-v2-pointEnd"] path,' + sel + '[id$="flowchart-v2-pointStart"] path{stroke-width:' + s.markerStroke + ' !important;}',
+      /* 流程图节点也统一成同一套观感 */
+      sel + '.flowchart-link{stroke-width:' + s.edgeW + ' !important;}',
+      sel + '.node rect,' + sel + '.node circle,' + sel + '.node ellipse,' + sel + '.node polygon,' + sel + '.node path{stroke-width:' + s.nodeW + 'px !important;}'
+    ].join('\n');
+    var style = svg.querySelector('style');
+    if (!style) return svg;
+    style.textContent += '\n/* markdown-docs-helper：图表样式 */\n' + css + '\n';
+    return svg;
+  }
+  /* 箭头：把状态图的 barbEnd 缩到参考图那种实心三角的观感（只动几何，不换 marker） */
+  function mgTuneMarkers(svg) {
+    if (!svg || mgStyleName() !== 'doc') return svg;
+    var defs = svg.querySelector('defs');
+    if (!defs) return svg;
+    var preset = (mermaidThemeName() === 'dark') ? MG_STYLE_DOC.dark : MG_STYLE_DOC.light;
+    var barb = defs.querySelector('marker[id$="stateDiagram-barbEnd"]');
+    if (barb) {
+      barb.setAttribute('markerWidth', '13');
+      barb.setAttribute('markerHeight', '11');
+      var p = barb.querySelector('path');
+      if (p) p.setAttribute('stroke', preset.marker);
+    }
+    return svg;
+  }
+  /* 标签底片的留白：mermaid 给的宽高基本贴着文字（左右各 1px），
+     参考图那种灰底片要宽松一点。foreignObject 的宽高是引擎按自己字号量出来的，
+     这里读回渲染尺寸后放大一圈，并把它在 <g class="label"> 的 transform 里居中
+     （那个 <g> 带 transform，改宽高盒模型撑不开它，只能改 transform）。 */
+  var MG_LABEL_PAD_X = 6, MG_LABEL_PAD_Y = 3;
+  function mgPadLabels(svg) {
+    var fos = svg.querySelectorAll('g.edgeLabel foreignObject');
+    for (var i = 0; i < fos.length; i++) {
+      var fo = fos[i];
+      var w = Number(fo.getAttribute('width')) || 0;
+      var h = Number(fo.getAttribute('height')) || 0;
+      if (!w || !h) continue;                       // 空标签（宽高 0）不动
+      var g = fo.parentNode;                        // <g class="label" transform="translate(x,y)">
+      var tr = (g && g.getAttribute && g.getAttribute('transform')) || '';
+      var m = /translate\(\s*(-?[\d.]+)[ ,]+(-?[\d.]+)\s*\)/.exec(tr);
+      if (!m) continue;
+      fo.setAttribute('width', String(Math.ceil(w + MG_LABEL_PAD_X * 2)));
+      fo.setAttribute('height', String(Math.ceil(h + MG_LABEL_PAD_Y * 2)));
+      g.setAttribute('transform', 'translate(' + (+m[1] - MG_LABEL_PAD_X) + ', ' + (+m[2] - MG_LABEL_PAD_Y) + ')');
+    }
+    return svg;
+  }
+  function mgDecorate(svg) {
+    if (!svg || mgStyleName() !== 'doc') return svg;
+    mgTuneMarkers(svg);
+    mgInjectTheme(svg);
+    mgPadLabels(svg);
+    return svg;
+  }
+  function initMermaidEngine() {
+    var api = window.mermaid;
+    if (!api) return null;
+    var theme = mermaidThemeName();
+    if (mgInited === theme + '|' + mgStyleName()) return api;
+    var opts = {
+      startOnLoad: false,
+      theme: theme,
+      securityLevel: mermaidCfg().securityLevel || 'strict',
+      // 用页面真实字体栈，CJK 标签的测量才准（'var(--font-sans)' 在 SVG 里不可靠）
+      fontFamily: (getComputedStyle(document.body).fontFamily || 'sans-serif'),
+      // 画不出来时不要往页面里塞 mermaid 自己的错误图，我们有自己的错误框
+      suppressErrorRendering: true
+    };
+    // 「文档风」配色：能走变量的都走变量，剩下的形状细节在 mgDecorate 里注入 CSS
+    var vars = mgThemeVariables();
+    if (vars) opts.themeVariables = vars;
+    api.initialize(opts);
+    // 语法错时别往控制台喷红字：错误已经由下面的 Promise 分支接住了
+    api.parseError = function (err) { state.mgError = String((err && err.message) || err); };
+    mgInited = theme + '|' + mgStyleName();
+    return api;
+  }
+  function mgBlocks() { return [].slice.call($('article').querySelectorAll('.mg-block')); }
+  function mgSource(el) {
+    var code = el.querySelector('.mg-body > pre.code > code');
+    return code ? code.textContent : '';
+  }
+  function mgKind(el) {
+    return { id: el.getAttribute('data-mg-kind') || '', name: ((el.querySelector('.mg-kind') || {}).textContent || '').trim() };
+  }
+  /* mermaid 渲染失败时会在 body 里留下临时节点（#d<id>），顺手清掉 */
+  function mgJunk(id) {
+    var el = document.getElementById('d' + id);
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+  function mgShowError(el, msg) {
+    var host = el.querySelector('.mg-host');
+    if (!host) return;
+    host.innerHTML = '';
+    var box = document.createElement('div');
+    box.className = 'mg-error';
+    box.innerHTML = '<strong>这张 Mermaid 图没能画出来</strong>' +
+      '<span class="mg-error-msg">' + esc(msg) + '</span>' +
+      '<span class="mg-error-hint">源码在下面，可以复制出来改；</span>';
+    host.appendChild(box);
+    el.setAttribute('data-mg-state', 'error');
+    el.setAttribute('data-mg-error', String(msg).slice(0, 400));
+    el.classList.add('mg-show-src');           // 失败时把源码摊开，方便直接改
+    state.mgError = String(msg);
+  }
+  /* 画一块；token 变了（换文档了）就丢弃结果，避免旧图覆盖新页面 */
+  function mgRenderOne(el, token) {
+    var api = initMermaidEngine();
+    var src = mgSource(el);
+    if (!api) {
+      el.setAttribute('data-mg-state', 'no-engine');
+      el.classList.add('mg-show-src');
+      return Promise.resolve();
+    }
+    if (!src.trim()) {
+      el.setAttribute('data-mg-state', 'empty');
+      el.classList.add('mg-show-src');
+      return Promise.resolve();
+    }
+    var id = 'mg-' + (++state.mgSeq);
+    el.setAttribute('data-mg-state', 'loading');
+    return api.render(id, src).then(function (res) {
+      if (token !== state.mgToken) return;
+      var host = el.querySelector('.mg-host');
+      if (host) host.innerHTML = res.svg;       // 成功：顺带清掉上一次的错误框
+      if (res.bindFunctions) res.bindFunctions(host);
+      if (host) mgDecorate(host.querySelector('svg'));   // 圆角 / 线宽 / 标签底片（文档风）
+      el.setAttribute('data-mg-state', 'ok');
+      el.removeAttribute('data-mg-error');
+      el.classList.remove('mg-show-src');
+      state.mgError = null;
+    }, function (err) {
+      mgJunk(id);
+      if (token !== state.mgToken) return;
+      mgShowError(el, (err && err.message) || String(err));
+    });
+  }
+  /* 依次画：一张张来，顺序稳定、错误好定位（大图也不会同时铺开抢布局） */
+  function mountMermaid() {
+    var blocks = mgBlocks();
+    var token = ++state.mgToken;
+    if (!blocks.length) { state.mgPromise = Promise.resolve(); return state.mgPromise; }
+    var chain = Promise.resolve();
+    blocks.forEach(function (el) {
+      el.setAttribute('data-mg-state', 'loading');      // 排队的也先显示「正在画图…」
+      chain = chain.then(function () { return mgRenderOne(el, token); });
+    });
+    state.mgPromise = chain;
+    return chain;
+  }
+  /* 主题换了要重画（mermaid 的主题是画进 SVG 里的），但保留「展开源码」的用户选择 */
+  function rerenderMermaid() {
+    var blocks = mgBlocks();
+    if (!blocks.length) return state.mgPromise || Promise.resolve();
+    blocks.forEach(function (el) {
+      var host = el.querySelector('.mg-host');
+      if (host) host.innerHTML = '';
+      el.setAttribute('data-mg-state', 'pending');
+      el.removeAttribute('data-mg-error');
+    });
+    return mountMermaid();
+  }
+  /* ---------- 工具栏：源码 / 复制 / 导出 SVG / 全屏 ---------- */
+  function mgBtnFeedback(btn, text) {
+    var old = btn.getAttribute('data-mg-label') || btn.textContent;
+    btn.setAttribute('data-mg-label', old);
+    btn.textContent = text;
+    clearTimeout(btn._mgTimer);
+    btn._mgTimer = setTimeout(function () {
+      btn.textContent = btn.getAttribute('data-mg-label') || old;
+    }, 1300);
+  }
+  function mgToggleSource(block, btn) {
+    var on = block.classList.toggle('mg-show-src');
+    if (btn) {
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.textContent = on ? '隐藏源码' : '源码';
+      btn.setAttribute('data-mg-label', btn.textContent);
+    }
+  }
+  function mgCopy(block, btn) {
+    var text = mgSource(block);
+    var done = function (ok) { mgBtnFeedback(btn, ok ? '已复制' : '复制失败'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+    } else {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        block.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand && document.execCommand('copy');
+        block.removeChild(ta);
+        done(!!ok);
+      } catch (e) { done(false); }
+    }
+  }
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  function mgDownloadName(block, ext) {
+    var base = String((state.current && state.current.title) || 'mermaid').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'mermaid';
+    var i = Number(block.getAttribute('data-mg-index')) || 1;
+    var kind = block.getAttribute('data-mg-kind') || 'mermaid';
+    return base + '-' + kind + '-' + i + '.' + ext;
+  }
+  /* 渲染好的 SVG 直接克隆出来就是自包含的（mermaid 把主题 CSS 也塞在 svg 里了），
+     只要补上明确的宽高/视图框，再垫一层当前主题的底色，单独打开也好看 */
+  function mgStandaloneSvg(block) {
+    var live = block.querySelector('.mg-host > svg');
+    if (!live) return null;
+    var clone = live.cloneNode(true);
+    var box = null;
+    try { box = live.getBBox(); } catch (e) { box = null; }
+    var rect = live.getBoundingClientRect();
+    var margin = 8;
+    var w = Math.ceil((box && box.width) || rect.width || 800);
+    var h = Math.ceil((box && box.height) || rect.height || 600);
+    var x = box && isFinite(box.x) ? box.x - margin : 0;
+    var y = box && isFinite(box.y) ? box.y - margin : 0;
+    w += margin * 2; h += margin * 2;
+    clone.setAttribute('xmlns', SVG_NS);
+    clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+    clone.setAttribute('width', String(w));
+    clone.setAttribute('height', String(h));
+    clone.setAttribute('viewBox', [x, y, w, h].join(' '));
+    var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    var bg = document.createElementNS(SVG_NS, 'rect');
+    bg.setAttribute('x', String(x)); bg.setAttribute('y', String(y));
+    bg.setAttribute('width', String(w)); bg.setAttribute('height', String(h));
+    bg.setAttribute('fill', dark ? '#0d1117' : '#ffffff');
+    clone.insertBefore(bg, clone.firstChild);
+    return { svg: clone, w: w, h: h };
+  }
+  function exportMermaidSvg(block) {
+    try {
+      var built = mgStandaloneSvg(block);
+      if (!built) { state.mgExportError = '这张图还没画出来（或者渲染失败），没有可导出的 SVG'; return null; }
+      var blob = new Blob([serializeSvg(built.svg)], { type: 'image/svg+xml;charset=utf-8' });
+      state.mgExportError = null;
+      triggerDownload(blob, mgDownloadName(block, 'svg'));
+      return blob;
+    } catch (e) {
+      state.mgExportError = exportError(e);
+      window.alert('导出 SVG 失败：' + (e && e.message ? e.message : e));
+      return null;
+    }
+  }
+  function mgFullscreenOn() { return !!state.mgFull; }
+  function setMermaidFullscreen(block, on) {
+    var want = (on === undefined) ? !block.classList.contains('mg-full') : !!on;
+    mgBlocks().forEach(function (el) { if (el !== block) el.classList.remove('mg-full'); });
+    block.classList.toggle('mg-full', want);
+    document.documentElement.classList.toggle('mg-full-on', want);
+    state.mgFull = want ? block : null;
+    var btn = block.querySelector('[data-mg-act="full"]');
+    if (btn) {
+      btn.textContent = want ? '退出全屏' : '全屏';
+      btn.setAttribute('data-mg-label', btn.textContent);
+      btn.setAttribute('aria-pressed', want ? 'true' : 'false');
+    }
+  }
+  function exitMermaidFullscreen() {
+    if (state.mgFull) setMermaidFullscreen(state.mgFull, false);
+  }
+  function mgAct(btn) {
+    var block = btn.closest ? btn.closest('.mg-block') : null;
+    if (!block) return;
+    var act = btn.getAttribute('data-mg-act');
+    if (act === 'src') mgToggleSource(block, btn);
+    else if (act === 'copy') mgCopy(block, btn);
+    else if (act === 'svg') exportMermaidSvg(block);
+    else if (act === 'full') setMermaidFullscreen(block);
   }
 
   /* ---------- 路由 ---------- */
@@ -1237,6 +1677,8 @@
   };
   document.addEventListener('click', function (e) {
     if (!e.target.closest) return;
+    var mgBtn = e.target.closest('.mg-btn');
+    if (mgBtn) { mgAct(mgBtn); return; }
     var oitem = e.target.closest('.mm-o-item');
     if (oitem) { mindmapOutlineActivate(oitem, !e.target.closest('.mm-o-caret')); return; }
     if (e.target.closest('a.docitem') && window.innerWidth < NARROW) setPane('left', false);
@@ -1290,7 +1732,11 @@
     var tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea') return;
     // Esc 先管全屏：搜索框里的 Esc（清空搜索）在上面的 input 分支里已经返回了
-    if (e.key === 'Escape') { if (mmFullscreenOn()) { e.preventDefault(); setMindmapFullscreen(false); } return; }
+    if (e.key === 'Escape') {
+      if (mgFullscreenOn()) { e.preventDefault(); exitMermaidFullscreen(); return; }
+      if (mmFullscreenOn()) { e.preventDefault(); setMindmapFullscreen(false); }
+      return;
+    }
     if (e.key === '/') { e.preventDefault(); if (state.cfg.sidebar.showSearch !== false) { $('search').focus(); $('search').select(); } return; }
     if (e.key === '[') { e.preventDefault(); togglePane('left'); return; }
     if (e.key === ']') { e.preventDefault(); togglePane('right'); }
@@ -1334,7 +1780,34 @@
     exportPng: exportMindmapPng,
     buildSvg: buildStandaloneSvg,
     downloadName: function (ext) { return mindmapDownloadName(state.current, ext); },
-    exportError: function () { return state.mmExportError || null; }
+    exportError: function () { return state.mmExportError || null; },
+    /* 嵌入的 Mermaid 图表（```mermaid）：给浏览器测试用的只读入口 + 两个动作 */
+    mermaidEnabled: mermaidEnabled,
+    mermaidEngine: function () { return !!window.mermaid; },
+    mermaidReady: function () { return state.mgPromise || Promise.resolve(); },
+    mermaidBlocks: function () {
+      return mgBlocks().map(function (el) {
+        var k = mgKind(el);
+        return {
+          index: Number(el.getAttribute('data-mg-index')) || 0,
+          kind: k.id, label: k.name,
+          state: el.getAttribute('data-mg-state') || '',
+          error: el.getAttribute('data-mg-error') || null,
+          source: mgSource(el),
+          showSource: el.classList.contains('mg-show-src'),
+          fullscreen: el.classList.contains('mg-full'),
+          nodes: el.querySelectorAll('.mg-host svg .node, .mg-host svg g.statediagram-state, .mg-host svg g.stateGroup').length,
+          edges: el.querySelectorAll('.mg-host svg path.flowchart-link, .mg-host svg path.transition, .mg-host svg .edgePath path').length,
+          text: (el.querySelector('.mg-host svg') || {}).textContent || ''
+        };
+      });
+    },
+    rerenderMermaid: rerenderMermaid,
+    exportMermaidSvg: function (i) {
+      var el = mgBlocks()[Number(i) || 0];
+      return el ? exportMermaidSvg(el) : null;
+    },
+    mermaidFullscreen: mgFullscreenOn
   };
 
   /* ---------- 启动 ---------- */

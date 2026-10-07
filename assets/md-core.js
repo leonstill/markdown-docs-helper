@@ -4,6 +4,8 @@
         （含嵌套与任务列表）、GFM 表格（含对齐）、水平线、
         行内 code/粗体/斜体/删除线/链接/图片/自动链接。
    不解析原始 HTML（按纯文本转义输出），避免文档注入脚本。
+   围栏里写 mermaid 时不算代码：调用方在 ctx 里传了 mermaid（MermaidCore.make(cfg)）
+   就改输出图表块（见 assets/mermaid-core.js），没传就照旧当普通代码块。
    ===================================================================== */
 var MarkdownCore = (function () {
   'use strict';
@@ -346,6 +348,12 @@ var MarkdownCore = (function () {
         }
         while (buf.length && !buf[buf.length - 1].trim()) buf.pop();
         var info = fm[2].trim();
+        // ```mermaid：交给调用方注入的渲染器（页面里是 MermaidCore）生成图表块
+        if (ctx.mermaid && ctx.mermaid.isFence && ctx.mermaid.isFence(info)) {
+          ctx.mermaidIndex = (ctx.mermaidIndex || 0) + 1;
+          out += ctx.mermaid.block(buf.join('\n'), info, ctx.mermaidIndex);
+          continue;
+        }
         var cls = /^[\w+#.-]+$/.test(info) ? ' class="language-' + attr(info.toLowerCase()) + '"' : '';
         out += '<pre class="code"><code' + cls + '>' + esc(buf.join('\n')) + '\n</code></pre>';
         continue;

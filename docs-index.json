@@ -1,57 +1,21 @@
 {
-  "generatedAt": "2026-09-22T06:47:27.965Z",
+  "generatedAt": "2026-10-07T09:47:40.585Z",
   "docsRoot": "docs/",
-  "count": 5,
+  "count": 1,
   "kinds": {
-    "markdown": 4,
-    "mindmap": 1
+    "markdown": 1,
+    "mindmap": 0
   },
   "skipped": 0,
   "docs": [
     {
-      "path": "docs/示例/表格与代码.md",
-      "dir": "docs/示例",
-      "name": "表格与代码.md",
+      "path": "docs/FPGA三段式状态机示例与讲解.md",
+      "dir": "docs",
+      "name": "FPGA三段式状态机示例与讲解.md",
       "kind": "markdown",
-      "title": "表格与代码",
-      "size": 2087,
-      "mtime": "2026-09-22T06:44:58.255Z"
-    },
-    {
-      "path": "docs/示例/思维导图-印检贴一体设备质量追溯改造.mermaid",
-      "dir": "docs/示例",
-      "name": "思维导图-印检贴一体设备质量追溯改造.mermaid",
-      "kind": "mindmap",
-      "title": "印检贴一体设备质量追溯改造 · 结论与建议",
-      "size": 5306,
-      "mtime": "2026-09-19T04:07:20.541Z"
-    },
-    {
-      "path": "docs/示例/Markdown 语法示例.md",
-      "dir": "docs/示例",
-      "name": "Markdown 语法示例.md",
-      "kind": "markdown",
-      "title": "Markdown 语法示例",
-      "size": 1909,
-      "mtime": "2026-09-19T02:48:49.538Z"
-    },
-    {
-      "path": "docs/指南/界面与快捷键.md",
-      "dir": "docs/指南",
-      "name": "界面与快捷键.md",
-      "kind": "markdown",
-      "title": "界面与快捷键",
-      "size": 2520,
-      "mtime": "2026-09-19T06:01:17.950Z"
-    },
-    {
-      "path": "docs/指南/快速开始.md",
-      "dir": "docs/指南",
-      "name": "快速开始.md",
-      "kind": "markdown",
-      "title": "快速开始",
-      "size": 2737,
-      "mtime": "2026-09-19T09:14:49.905Z"
+      "title": "FPGA 三段式状态机示例与讲解",
+      "size": 23707,
+      "mtime": "2026-10-07T03:31:39.839Z"
     }
   ]
 }

@@ -77,5 +77,33 @@
     "showOutline": true,
     // 是否显示导图工具栏上的 SVG / PNG 导出按钮
     "exportImage": true
+  },
+
+  // ── 嵌入的 Mermaid 图表（Markdown 里的 ```mermaid 围栏）────────────
+  // 文档正文里这样写，就会在页面里画成图（不需要联网，引擎已内置 vendor/mermaid）：
+  //   ```mermaid
+  //   stateDiagram-v2
+  //       [*] --> IDLE
+  //       IDLE --> RUN : start
+  //   ```
+  // 支持 mermaid 全部版式：stateDiagram / stateDiagram-v2 / flowchart / sequenceDiagram /
+  // classDiagram / erDiagram / gantt / pie / mindmap / timeline …（写错语法时保留源码并给出提示）
+  "mermaid": {
+    // 总开关：设成 false 后 ```mermaid 围栏退回普通代码块，页面里也不再塞这几个 MB 的引擎
+    "enabled": true,
+    // 配色：auto = 跟随页面深浅色自动切换；也可写死 mermaid 的主题名：
+    // default / dark / forest / neutral / base
+    "theme": "auto",
+    // 观感：doc = 文档风（圆角浅紫状态胶囊 + 深紫描边 + 深灰连线 + 不透明浅灰标签底片，
+    //              并顺带统一流程图节点/连线的线宽），plain = mermaid 原样
+    "style": "doc",
+    // 安全级别：strict（默认，标签里的 HTML 会被转义）/ loose（允许 <br/> 等标签，文档可信时才用）
+    "securityLevel": "strict",
+    // 每张图右上角的小工具栏（源码 / 复制 / SVG / 全屏）
+    "controls": true,
+    // 工具栏里是否给「SVG」导出按钮（导出的 SVG 自带主题样式，单独打开也对）
+    "exportImage": true,
+    // 工具栏里是否给「全屏」按钮（长图、宽图看起来更舒服，Esc 退出）
+    "fullscreen": true
   }
 }

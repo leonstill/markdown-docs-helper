@@ -14,6 +14,7 @@
  * ===================================================================== */
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -36,15 +37,29 @@ try { snap = JSON.parse(m[1]); } catch (e) { console.log('x 快照 JSON 解析�
 console.log(`  快照：${snap.docs.length} 篇，忽略 ${snap.skipped} 个非 md 文件，生成于 ${snap.generatedAt}`);
 console.log(`  正文合计：${snap.docs.reduce((n, d) => n + d.text.length, 0)} 字符`);
 
+/* .mermaid 文件有两种：思维导图（mindmap 版式）与整篇图表（stateDiagram-v2 等）。
+   判断规则直接用页面那份 assets/mermaid-core.js，避免这里另写一套版式清单。 */
+const MermaidCore = (function loadCore() {
+  const sandbox = { module: { exports: {} }, exports: null, console };
+  sandbox.exports = sandbox.module.exports;
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'assets', 'mermaid-core.js'), 'utf8'), sandbox);
+  return sandbox.module.exports;
+})();
 const mmDocs = snap.docs.filter((d) => d.kind === 'mindmap');
 const mdDocs = snap.docs.filter((d) => d.kind !== 'mindmap');
+const mmDiagram = mmDocs.filter((d) => !!MermaidCore.diagramKind(d.text));
+const mmMindmap = mmDocs.filter((d) => !mmDiagram.includes(d));
 
 check(!m[1].includes('</script'), '快照 JSON 中没有裸的 "</script"');
 check(snap.docs.every((d) => !d.text.includes('</script')), '没有文档的正文原样包含 </script>');
 check(snap.docs.every((d) => d.path && d.title && d.text), '每条快照都有路径、标题、正文');
 check(mdDocs.every((d) => /\.md$/i.test(d.path)), 'Markdown 条目都以 .md 结尾');
 check(mmDocs.every((d) => /\.mermaid$/i.test(d.path)), `思维导图条目都以 .mermaid 结尾（${mmDocs.length} 篇）`);
-check(mmDocs.every((d) => /^\s*mindmap\s*$/im.test(d.text)), '思维导图条目正文里有 mindmap 声明');
+check(mmMindmap.every((d) => /^\s*mindmap\s*$/im.test(d.text)),
+  `${mmMindmap.length} 篇 .mermaid 是思维导图版式（正文里有 mindmap 声明）`);
+check(mmDiagram.every((d) => MermaidCore.diagramKind(d.text).id !== 'unknown'),
+  `${mmDiagram.length} 篇 .mermaid 是整篇图表（${mmDiagram.map((d) => d.name + ' → ' + MermaidCore.diagramKind(d.text).name).join('、') || '无'}）`);
 check(!snap.kinds || (snap.kinds.markdown === mdDocs.length && snap.kinds.mindmap === mmDocs.length),
   `kinds 统计与条目一致（markdown ${mdDocs.length} / mindmap ${mmDocs.length}）`);
 check(snap.count === snap.docs.length, `count 字段与实际条目一致（${snap.count}）`);
@@ -59,25 +74,35 @@ function bundleIds() {
   return [...src.matchAll(/\{\s*id:\s*'([^']+)',\s*file:/g)].map((x) => x[1]);
 }
 
+/* 引擎块的三种合法状态：
+     · 正常内联 —— 块内有源码
+     · data-disabled="1" —— config 把这个功能关了（mermaid.enabled = false）
+     · data-unused="1"   —— 功能开着，但这批文档里没用到，离线版按需不内联
+   页面侧靠 window.mermaid 是否存在自行降级，所以留空块是安全的。 */
 const BUNDLE_IDS = bundleIds();
 for (const id of BUNDLE_IDS) {
-  const bm = new RegExp(`<script id="${id}">([\\s\\S]*?)</script>`).exec(html);
-  check(!!bm, `页面里有内联引擎块 ${id}`);
-  if (bm) {
-    check(bm[1].length > 10000, `${id} 不是空块（${(bm[1].length / 1024 | 0)} KB）`);
-    check(!/<\/script/i.test(bm[1]), `${id} 块内没有裸的 </script`);
+  const bm = new RegExp(`<script id="${id}"([^>]*)>([\\s\\S]*?)</script>`).exec(html);
+  check(!!bm, `页面里有引擎块 ${id}`);
+  if (!bm) continue;
+  const off = /data-(disabled|unused)="1"/.test(bm[1]);
+  if (off) {
+    const why = /data-disabled/.test(bm[1]) ? 'config 里关掉了' : '这批文档没用到';
+    check(bm[2].trim() === '', `${id} 未内联（${why}），块是空的`);
+  } else {
+    check(bm[2].length > 10000, `${id} 不是空块（${(bm[2].length / 1024 | 0)} KB）`);
+    check(!/<\/script/i.test(bm[2]), `${id} 块内没有裸的 </script`);
   }
 }
 const tags = (html.match(/<script/g) || []).length;
-/* 5 段固定脚本：配置、快照、mindmap-core、md-core、md-app（后三段是 assets/ 外链） */
-const BASE_SCRIPTS = 5;
+/* 6 段固定脚本：配置、快照、mindmap-core、mermaid-core、md-core、md-app（后四段是 assets/ 外链） */
+const BASE_SCRIPTS = 6;
 check(tags === BASE_SCRIPTS + BUNDLE_IDS.length,
-  `页面里 <script 标签共 ${BASE_SCRIPTS + BUNDLE_IDS.length} 个（配置 + 快照 + mindmap-core + md-core + md-app + ${BUNDLE_IDS.length} 段引擎），实际 ${tags}`);
+  `页面里 <script 标签共 ${BASE_SCRIPTS + BUNDLE_IDS.length} 个（配置 + 快照 + 4 段自研 + ${BUNDLE_IDS.length} 段引擎），实际 ${tags}`);
 for (const id of ['viewer-config', 'docs-snapshot']) {
   check(html.includes(`<script id="${id}"`), `页面里有 <script id="${id}">`);
 }
 /* 自研脚本已抽到 assets/：页面只留外链，源码在 assets/<id>.js */
-for (const id of ['mindmap-core', 'md-core', 'md-app']) {
+for (const id of ['mindmap-core', 'mermaid-core', 'md-core', 'md-app']) {
   const rel = `assets/${id}.js`;
   check(html.includes(`<script id="${id}" src="${rel}">`), `页面外链 <script id="${id}" src="${rel}">`);
   const full = path.join(ROOT, rel);

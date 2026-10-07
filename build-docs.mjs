@@ -22,7 +22,7 @@
  *   node build-docs.mjs                       # 扫描 ./docs，刷新页面内置数据
  *   node build-docs.mjs <目录>                 # 扫描任意目录（页面内路径前缀仍为 docs/）
  *   node build-docs.mjs --check [目录]         # 只检查是否过期（过期退出码 1），不写文件
- *   node build-docs.mjs --serve [目录]         # 启动本地实时服务（默认 8899，占用则顺延）
+ *   node build-docs.mjs --serve [目录]         # 启动本地实时服务（默认 8899，绑不上就往后顺延）
  *                                             #   并生成 index.html，访问 / 即进实时版
  *   node build-docs.mjs --serve --port 9000 [目录]
  *   node build-docs.mjs --serve --lan [目录]   # 绑定所有网卡（0.0.0.0），同一局域网内可访问
@@ -54,9 +54,22 @@ import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));   // 工程根
+/* 页面侧的纯函数模块在构建期也要用，保证「构建怎么判断」与「页面怎么渲染」永远同一套规则。
+   注意 assets/*.js 是给浏览器用的经典脚本（末尾带 module.exports 便于 Node 测试），
+   而本工程是 "type": "module"，直接 require 会被当成 ESM —— 所以按经典脚本就地求值。 */
+function loadAssetModule(rel) {
+  const file = path.join(ROOT, rel);
+  const sandbox = { module: { exports: {} }, exports: null, console };
+  sandbox.exports = sandbox.module.exports;
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: file });
+  return sandbox.module.exports;
+}
+const MermaidCore = loadAssetModule('assets/mermaid-core.js');
 /* 页面里的文档路径前缀。固定为 docs/，与文档的真实位置无关：
    即使用命令行指定了别的目录，config.json 里的 folders/exclude/docs 也不用改。 */
 const VIRTUAL_ROOT = 'docs';
@@ -73,23 +86,55 @@ const DEFAULT_PORT = 8899;
 /* 默认只听环回：不给参数就不会把文档暴露到网络上。--lan / --host 才对外。 */
 const DEFAULT_HOST = '127.0.0.1';
 const LAN_HOST = '0.0.0.0';         // --lan 的等价写法：所有网卡
-const VENDOR_DIR = path.join(ROOT, 'vendor', 'markmap');
+const VENDOR_MARKMAP = path.join(ROOT, 'vendor', 'markmap');
+const VENDOR_MERMAID = path.join(ROOT, 'vendor', 'mermaid');
 
-/* 思维导图引擎。模板里只有三个空块占位，构建时按产物填不同内容：
+/* 页面里的引擎块。模板里只有空占位，构建时按产物填不同内容：
      离线版 md-viewer.html —— 整段内联（file:// 页面加载不了外部脚本）
-     实时版 index.html     —— 换成 vendor/markmap/*.js 的本地外链（浏览器可缓存）
+     实时版 index.html     —— 换成 vendor/ 下的本地外链（浏览器可缓存）
    顺序很重要：markmap-view 的浏览器构建是 (this.markmap, d3) 形式的 IIFE，
-   依赖全局 d3 已经存在，所以 d3 必须排在最前面。 */
+   依赖全局 d3 已经存在，所以 d3 必须排在最前面；mermaid 自成一体，放最后。
+   on(cfg) 返回 false 的引擎会被跳过：两个产物里都只留一个带 data-disabled="1"
+   的空块 —— 这样关掉功能就真的不给页面塞几个 MB 的引擎，围栏退回普通代码块。
+   注意：{ id, file } 的键序不要改，test/check-snapshot.mjs 是按这个形状读清单的。 */
 const BUNDLES = [
-  { id: 'vendor-d3', file: 'd3.min.js', role: 'd3' },
-  { id: 'vendor-markmap-lib', file: 'markmap-lib.iife.js', role: 'markmap-lib' },
-  { id: 'vendor-markmap-view', file: 'markmap-view.browser.js', role: 'markmap-view' },
+  { id: 'vendor-d3', file: 'd3.min.js', dir: VENDOR_MARKMAP, role: 'd3' },
+  { id: 'vendor-markmap-lib', file: 'markmap-lib.iife.js', dir: VENDOR_MARKMAP, role: 'markmap-lib' },
+  { id: 'vendor-markmap-view', file: 'markmap-view.browser.js', dir: VENDOR_MARKMAP, role: 'markmap-view' },
+  {
+    id: 'vendor-mermaid', file: 'mermaid.min.js', dir: VENDOR_MERMAID, role: 'mermaid',
+    on: (cfg) => mermaidEnabled(cfg),
+    /* 按需内联：只有这次构建的文档里真的出现了 Mermaid 图表才把引擎塞进离线单文件。
+       没用到时离线版留空块（标 data-unused="1"），md-viewer.html 仍是 1 MB 上下；
+       实时版照旧本地外链（文档可能随时新增围栏，外链可缓存、不占体积）。 */
+    need: (ctx) => !!ctx.needMermaid,
+  },
 ];
 const bundleRe = (id) => new RegExp(`(<script id="${id}">)([\\s\\S]*?)(</script>)`);
-const VENDOR_REL = (b) => `vendor/markmap/${b.file}`;
+const VENDOR_REL = (b) => path.relative(ROOT, path.join(b.dir, b.file)).split(path.sep).join('/');
 const vendorTag = (b) => `<script id="${b.id}" src="${VENDOR_REL(b)}"></script>`;
 /* 文档目录里哪些后缀算「文档」：.md 按 Markdown 渲染，.mermaid 按思维导图渲染 */
 const DEFAULT_MINDMAP_EXT = ['.mermaid'];
+
+/** 思维导图总开关（config.mindmap.enabled = false 时 .mermaid 只当普通文本） */
+function mindmapEnabled(cfg) {
+  return !(cfg && cfg.mindmap && cfg.mindmap.enabled === false);
+}
+
+/** 嵌入 Mermaid 图表总开关（config.mermaid.enabled = false 时围栏退回普通代码块） */
+function mermaidEnabled(cfg) {
+  return !(cfg && cfg.mermaid && cfg.mermaid.enabled === false);
+}
+
+/** 这次构建的文档里有没有 Mermaid 图表（决定离线单文件要不要内联那 3 MB 的引擎）：
+    · .md —— 正文里有 ```mermaid 围栏
+    · .mermaid —— 整篇写的是 mindmap 以外的版式（stateDiagram-v2 / flowchart…）
+    判断规则来自 assets/mermaid-core.js（页面用的同一份），此处不另写一套。 */
+function needsMermaidEngine(docs) {
+  return docs.some((d) => (d.kind === 'mindmap'
+    ? !!MermaidCore.diagramKind(d.text)
+    : MermaidCore.usesFence(d.text)));
+}
 
 /* ---------- 安全护栏：写操作只能落在工程内，且绝不能碰文档目录 ---------- */
 function assertInsideRoot(target) {
@@ -380,6 +425,10 @@ const DEFAULT_CONFIG = {
     enabled: true, extensions: ['.mermaid'], initialExpandLevel: 2,
     showOutline: true, exportImage: true,
   },
+  mermaid: {
+    enabled: true, theme: 'auto', securityLevel: 'strict',
+    controls: true, exportImage: true, fullscreen: true,
+  },
 };
 
 async function readConfig({ createIfMissing = false } = {}) {
@@ -397,32 +446,45 @@ async function readConfig({ createIfMissing = false } = {}) {
   return { value: parseJsonc(text), source: 'file' };
 }
 
-/* 读取 vendor 下的引擎代码，准备整段内联进页面 */
-async function readBundles() {
+/* 读取 vendor 下的引擎代码，准备整段内联进页面。
+   cfg 里关掉的引擎不读文件，只登记成 disabled（页面里留空块）；
+   need(ctx) 返回 false 的引擎登记成 skipped（离线版不内联，实时版照旧外链）。 */
+async function readBundles(cfg, ctx = {}) {
   const out = [];
   for (const b of BUNDLES) {
-    const file = path.join(VENDOR_DIR, b.file);
+    const enabled = typeof b.on === 'function' ? !!b.on(cfg) : true;
+    const needed = enabled && (typeof b.need === 'function' ? !!b.need(ctx) : true);
+    if (!enabled) {
+      out.push({ id: b.id, file: b.file, dir: b.dir, role: b.role, disabled: true, skipped: false, text: '' });
+      continue;
+    }
+    if (!needed) {
+      out.push({ id: b.id, file: b.file, dir: b.dir, role: b.role, disabled: false, skipped: true, text: '' });
+      continue;
+    }
+    const file = path.join(b.dir, b.file);
     let text;
     try {
       text = await fsp.readFile(file, 'utf8');
     } catch (e) {
-      throw new Error(`缺少思维导图引擎文件：${path.relative(ROOT, file)}\n` +
-        '  请从 vendor/markmap/README.md 里按说明取回（或删掉 config.json 的 mindmap 配置不用该功能）。');
+      throw new Error(`缺少页面引擎文件：${path.relative(ROOT, file)}\n` +
+        `  请从 vendor/${path.basename(b.dir)}/README.md 里按说明取回` +
+        '（或把 config.json 里对应的功能关掉）。');
     }
     if (/<\/script/i.test(text)) {
       throw new Error(`${path.relative(ROOT, file)} 内含 "</script"，无法安全内联`);
     }
-    out.push({ id: b.id, file: b.file, text });
+    out.push({ id: b.id, file: b.file, dir: b.dir, role: b.role, disabled: false, skipped: false, text });
   }
   return out;
 }
 
 /* ---------- 两个页面的生成：模板 → 一次性替换 → md-viewer.html / index.html ----------
-   模板 page.template.html 里只有四处空占位，其余全是纯 HTML，一眼能看懂：
+   模板 page.template.html 里只有五个空占位，其余全是纯 HTML，一眼能看懂：
      <script id="viewer-config" type="application/json"></script>   页面配置
      <script id="docs-snapshot" type="application/json"></script>   文档快照
-     <script id="vendor-d3|markmap-lib|markmap-view"></script>      三个引擎空块
-   两个产物的差别**只有**这两处，所以用同一个替换函数、同一份文档数据生成，
+     <script id="vendor-*"></script>                                引擎空块（4 段）
+   两个产物的差别**只有**这些占位，所以用同一个替换函数、同一份文档数据生成，
    不存在“先写一个文件再回头改另一个”的二次加工。 */
 function renderPage(template, { cfgText, snapText, bundles, mode }) {
   const value = (id) => {
@@ -430,19 +492,25 @@ function renderPage(template, { cfgText, snapText, bundles, mode }) {
     if (id === 'docs-snapshot') return mode === 'realtime' ? '{}' : snapText;
     const b = bundles.find((x) => x.id === id);
     if (!b) throw new Error(`模板里出现了未知脚本块：${id}`);
+    if (b.disabled || (b.skipped && mode !== 'realtime')) return '';   // 留空块
     /* 引擎占位：实时版整块换成指向本地文件的外链（返回 null 表示用外链标签），离线版把源码内联进来 */
     return mode === 'realtime' ? null : '\n' + b.text + '\n';
   };
   /* 一次性扫描所有占位块，按出现顺序拼接，避免「替换完再去重新定位下一个」那种脆弱写法。
      每个块都替换成完整的 <script ...>...</script>，不留半截标签。 */
-  const re = /<script id="(viewer-config|docs-snapshot|vendor-d3|vendor-markmap-lib|vendor-markmap-view)"([^>]*)>([\s\S]*?)<\/script>/g;
+  const re = /<script id="(viewer-config|docs-snapshot|vendor-d3|vendor-markmap-lib|vendor-markmap-view|vendor-mermaid)"([^>]*)>([\s\S]*?)<\/script>/g;
   let out = '', last = 0, seen = 0, m;
   while ((m = re.exec(template))) {
     const id = m[1];
+    /* viewer-config / docs-snapshot 不在 bundles 里，只有 vendor-* 才是引擎块 */
+    const b = id.startsWith('vendor-') ? bundles.find((x) => x.id === id) : null;
+    if (id.startsWith('vendor-') && !b) throw new Error(`模板里出现了未知脚本块：${id}`);
     const inner = value(id);
-    const replacement = inner === null
-      ? vendorTag(bundles.find((x) => x.id === id))
-      : `<script id="${id}"${m[2]}>${inner}</script>`;
+    let replacement;
+    if (b && b.disabled) replacement = `<script id="${id}"${m[2]} data-disabled="1"></script>`;
+    else if (b && b.skipped && mode !== 'realtime') replacement = `<script id="${id}"${m[2]} data-unused="1"></script>`;
+    else if (inner === null) replacement = vendorTag(b);
+    else replacement = `<script id="${id}"${m[2]}>${inner}</script>`;
     out += template.slice(last, m.index) + replacement;
     last = m.index + m[0].length;
     seen++;
@@ -470,7 +538,8 @@ async function build({ quiet = false, check = false, realtimePage = false } = {}
   const idx = indexPayload(docs, skipped);
   const snapText = renderSnapshot(snap);
   const cfgText = renderConfig(cfg.value);
-  const bundles = await readBundles();
+  const needMermaid = mermaidEnabled(cfg.value) && needsMermaidEngine(docs);
+  const bundles = await readBundles(cfg.value, { needMermaid });
   const template = await fsp.readFile(TEMPLATE, 'utf8');
   const next = renderPage(template, { cfgText, snapText, bundles, mode: 'offline' });
   const realtime = renderPage(template, { cfgText, snapText, bundles, mode: 'realtime' });
@@ -486,8 +555,7 @@ async function build({ quiet = false, check = false, realtimePage = false } = {}
       const bm = bundleRe(b.id).exec(viewerText);
       return bm ? bm[2].trim() : '';
     });
-    const bundleStale = embedded.some((text, i) => text !== bundles[i].text.trim());
-    /* 真正的检验：产物应与「模板 + 当前数据」完全一致（generatedAt 除外）。
+    const bundleStale = embedded.some((text, i) => text !== bundles[i].text.trim());    /* 真正的检验：产物应与「模板 + 当前数据」完全一致（generatedAt 除外）。
        模板被手改、引擎没跟上、占位块填错，都会在这里露出来，不需要另写一套结构校验规则。 */
     const viewerStale = pageSignature(viewerText) !== pageSignature(next);
     /* index.html 是 --serve 的生成物：存在才校验 */
@@ -498,7 +566,7 @@ async function build({ quiet = false, check = false, realtimePage = false } = {}
         snapStale && '页面内置文档快照',
         cfgStale && '页面内置配置',
         idxStale && 'docs-index.json',
-        bundleStale && '页面内置思维导图引擎',
+        bundleStale && '页面内置引擎（markmap / mermaid 源码）',
         viewerStale && 'md-viewer.html（与 page.template.html 不一致，或模板被手改过）',
         realtimeStale && 'index.html（实时版页面）',
       ].filter(Boolean);
@@ -534,18 +602,27 @@ async function build({ quiet = false, check = false, realtimePage = false } = {}
     const visible = (sb.folders && sb.folders.length) ? '仅 config.json 列出的目录' : '全部目录';
     const hidden = Object.keys(sb.docs || {}).filter((key) => (sb.docs[key] || {}).hidden).length;
     const mm = (cfg.value.mindmap || {});
+    const mgBundle = bundles.find((b) => b.role === 'mermaid');
+    const mgCfg = (cfg.value.mermaid || {});
     console.log('✓ 已刷新文档快照与页面配置');
     console.log(`  文档目录：${DOCS_DIR}${DOCS_DIR === DEFAULT_DOCS_DIR ? '' : '（命令行指定）'}`);
     console.log(`  文档：${docs.length} 篇（markdown ${k.markdown} 篇${k.mindmap ? ` · 思维导图 ${k.mindmap} 篇` : ''}` +
       `，扫描 ${files} 个文件，忽略 ${skipped} 个不支持的文件）`);
     docs.forEach((d) => console.log(`    · ${d.path}  ${(d.size / 1024).toFixed(1)} KB  ${d.title}`));
     console.log(`  思维导图：${mm.enabled === false ? '已关闭（config.json mindmap.enabled = false）' :
-      `启用 · 后缀 ${mindmapExts(cfg.value).join(' ')} · 引擎已内联 ${(bundles.reduce((n, b) => n + b.text.length, 0) / 1024).toFixed(0)} KB`}`);
+      `启用 · 后缀 ${mindmapExts(cfg.value).join(' ')} · 引擎已内联 ${(bundles.reduce((n, b) => n + (b.text || '').length, 0) / 1024).toFixed(0)} KB`}`);
+    const mgState = mgCfg.enabled === false
+      ? '已关闭（config.json mermaid.enabled = false）· 围栏只当普通代码块'
+      : mgBundle.skipped
+        ? '启用，但这批文档里没有 Mermaid 图表 · 离线单文件不内联引擎（实时版仍本地外链）'
+        : `启用 · \`\`\`mermaid 围栏与 .mermaid 图表文档都会画成图 · 引擎已内联 ${(mgBundle.text.length / 1024).toFixed(0)} KB（实时版本地外链）`;
+    console.log(`  嵌入 Mermaid 图表：${mgState}`);
     console.log(`  左栏显示规则：${visible}` +
       ((sb.exclude || []).length ? ` · 排除 ${(sb.exclude || []).length} 项` : '') +
       (hidden ? ` · 隐藏 ${hidden} 篇` : ''));
     console.log(`  配置来源：config.json（${cfg.source === 'file' ? '已读取' : '缺失，用默认值'}）`);
-    console.log(`  内置快照：${Buffer.byteLength(next, 'utf8') / 1024 | 0} KB（其中文档数据 ${Buffer.byteLength(snapText, 'utf8') / 1024 | 0} KB）`);
+    console.log(`  离线单文件：${Buffer.byteLength(next, 'utf8') / 1024 | 0} KB` +
+      `（文档数据 ${Buffer.byteLength(snapText, 'utf8') / 1024 | 0} KB · 内联引擎 ${bundles.reduce((n, b) => n + (b.text || '').length, 0) / 1024 | 0} KB）`);
     console.log('');
     console.log('  直接双击打开：md-viewer.html');
     console.log('  实时浏览（文档/配置改动无需重建）：node build-docs.mjs --serve');
@@ -611,12 +688,37 @@ function normalizeHost(value) {
   return /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(s) ? s : null;
 }
 
+/* EACCES 有两种完全不同的来头，别混为一谈：
+     · 1024 以下的特权端口 —— Linux/macOS 上要 root/sudo，Windows 上这类端口
+       还常被系统组件（IIS/http.sys）先占着；
+     · 端口被别的程序独占监听 —— Windows 上第二次 bind 拿到的就是 EACCES
+       （WSAEACCES 10013），EADDRINUSE 反而见不到；Hyper-V/WSL/Docker 预留的
+       端口段也报 EACCES。实测：mosquitto 占着 0.0.0.0:9001 时，
+       node 绑 127.0.0.1:9001 报的就是 EACCES，与「小于 1024」毫无关系。 */
+const EACCES_DETAIL = 'Windows 上端口被别的程序独占监听、' +
+  '或落在 Hyper-V/WSL/Docker 预留的端口段里，报的都是 EACCES';
+
+function eaccesReason(port) {
+  if (port < 1024) {
+    return `端口 ${port} 小于 1024，绑定特权端口要管理员权限` +
+      `（Linux/macOS 用 sudo，Windows 用管理员身份的终端）；` +
+      `Windows 上这类端口还常被系统组件（IIS/http.sys）独占，换 1024 以上的端口最省事`;
+  }
+  return `端口 ${port} 被别人占着或用不了：${EACCES_DETAIL}`;
+}
+
+/** 端口用不了时，怎么自己查清楚 */
+function portOwnerHint(port) {
+  return `查占用：netstat -ano | findstr :${port}（看 PID），` +
+    `查系统预留：netsh interface ipv4 show excludedportrange protocol=tcp`;
+}
+
 /** 把 bind 失败翻译成能照着改的提示 */
-function bindError(err, host) {
+function bindError(err, host, port) {
   const tip = {
     EADDRNOTAVAIL: `本机没有这个地址：${host}（用 ipconfig / ifconfig 看一眼本机 IP，或直接用 --lan 绑定所有网卡）`,
     ENOTFOUND: `解析不了这个主机名：${host}`,
-    EACCES: `没有权限绑定 ${host}（端口小于 1024 需要管理员权限，换个大端口或用 --port 指定）`,
+    EACCES: `没有权限绑定 ${host}：${eaccesReason(port)}（${portOwnerHint(port)}）`,
     EAFNOSUPPORT: `本机不支持这种地址：${host}`,
   }[err.code];
   const e = new Error(tip || `无法绑定 ${host}：${err.message}`);
@@ -683,15 +785,30 @@ async function serve(port, kinds, host = DEFAULT_HOST) {
     }
   });
 
-  /* 端口被占用就从 port+1 顺延，最多试 10 个；绑定地址坏了则直接报错说清原因 */
+  /* 端口用不了就从 port+1 顺延，最多试 10 个。
+     「用不了」有两种：EADDRINUSE 是常规的「端口被占用」；Windows 上端口被别的
+     程序独占监听时拿到的是 EACCES，同样属于「这个端口用不了」，所以一并顺延。
+     只顺延 1024 以上的端口：再往下走全是特权端口，权限/系统占用的问题换 +1
+     也解决不了，那种情况直接报错并把原因说清楚（用户写的是明确的端口号）。
+     绑定地址坏了（EADDRNOTAVAIL 等）换端口同样救不了，直接报错。 */
   const MAX_TRIES = 10;
+  const TRIES_TOTAL = MAX_TRIES + 1;
+  const occupied = (err, p) => (err.code === 'EADDRINUSE' || err.code === 'EACCES') && p >= 1024;
+  let warned = false;
   const listen = (p, tries) => new Promise((resolve, reject) => {
     server.once('error', (err) => {
-      if (err.code === 'EADDRINUSE' && tries > 0) return resolve(listen(p + 1, tries - 1));
-      if (err.code === 'EADDRINUSE') {
-        return reject(new Error(`从端口 ${port} 起连续 ${MAX_TRIES + 1} 个端口都被占用，用 --port 换一个空闲端口`));
+      if (!occupied(err, p)) return reject(bindError(err, host, p));
+      if (tries === 0) {
+        return reject(new Error(
+          `从端口 ${port} 起连续 ${TRIES_TOTAL} 个端口都绑不上（被别的程序占用、或系统保留），` +
+          `用 --port 换一个空闲端口；${portOwnerHint(port)}`));
       }
-      reject(bindError(err, host));
+      if (!warned) {
+        warned = true;
+        console.log(`! 端口 ${p} 绑不上（${err.code}），自动往后找端口` +
+          (err.code === 'EACCES' ? `：${EACCES_DETAIL}` : ''));
+      }
+      resolve(listen(p + 1, tries - 1));
     });
     server.listen(p, host, () => resolve(p));
   });
