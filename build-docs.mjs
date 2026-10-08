@@ -421,6 +421,7 @@ const DEFAULT_CONFIG = {
   },
   toc: { title: '本篇目录', defaultOpen: true, remember: true, maxDepth: 4 },
   reading: { maxWidth: 920 },
+  markdown: { html: 'escape' },
   mindmap: {
     enabled: true, extensions: ['.mermaid'], initialExpandLevel: 2,
     showOutline: true, exportImage: true,

@@ -25,6 +25,7 @@
     },
     toc: { title: '本篇目录', defaultOpen: true, remember: true, maxDepth: 4 },
     reading: { maxWidth: 920 },
+    markdown: { html: 'escape' },
     mindmap: {
       enabled: true, extensions: ['.mermaid'], initialExpandLevel: 2,
       showOutline: true, exportImage: true
@@ -146,6 +147,12 @@
     if (state.byBase[b]) return { path: state.byBase[b].path, section: section };
     return null;
   }
+  /* 正文里的 HTML 怎么处理：escape（转义显示，默认）/ innerhtml（原样输出）/ strip（吃掉标签只留内容）。
+     认不出的值一律退回 escape，保证旧配置与写错的配置行为不变。 */
+  function htmlMode() {
+    var m = (state.cfg.markdown || {}).html;
+    return m === 'innerhtml' || m === 'strip' ? m : 'escape';
+  }
   function ctxFor(docPath) {
     return {
       docPath: docPath || '',
@@ -155,6 +162,7 @@
       sectionsOf: sectionsOf,
       headings: [],
       sectionMap: {},
+      html: htmlMode(),
       /* ```mermaid 围栏交给 mermaid-core 生成图表块；功能关掉时不传，围栏照旧当代码块 */
       mermaid: mermaidEnabled() ? MermaidCore.make(state.cfg.mermaid) : null
     };
@@ -169,7 +177,7 @@
     if (Object.prototype.hasOwnProperty.call(sectionCache, path)) return sectionCache[path];
     var doc = state.byPath[path];
     if (!doc) return null;
-    var map = {}, hs = Core.scanHeadings(String(doc.text || ''));
+    var map = {}, hs = Core.scanHeadings(String(doc.text || ''), htmlMode());
     for (var i = 0; i < hs.length; i++) {
       if (hs[i].num && !(hs[i].num in map)) map[hs[i].num] = hs[i].id;
     }
@@ -403,7 +411,7 @@
       var l = lines[i].trim();
       if (!l || decls[i]) continue;
       if (/^#{1,6}\s/.test(l) || /^\||^>|^```|^[-*+]\s|^\d+[.)]\s|^<|^-{3,}$/.test(l)) continue;
-      var s = Core.plain(l).replace(/\s+/g, ' ');
+      var s = Core.plain(l, htmlMode()).replace(/\s+/g, ' ');
       return s.length > 88 ? s.slice(0, 88) + '…' : s;
     }
     return '';
@@ -589,7 +597,7 @@
     out.headings.forEach(function (h) {
       if (h.level < 2 || h.level > maxDepth) return;
       toc += '<li class="lv' + h.level + '"><a href="' + docHref(doc.path, h.id) +
-        '" data-sec="' + esc(h.id) + '">' + esc(Core.plain(h.text)) + '</a></li>';
+        '" data-sec="' + esc(h.id) + '">' + esc(Core.plain(h.text, htmlMode())) + '</a></li>';
     });
     $('tocList').innerHTML = toc || '<li class="toc-empty">本文无二级标题</li>';
 

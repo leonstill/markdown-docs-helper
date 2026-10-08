@@ -232,6 +232,8 @@ html[data-theme="dark"] .sidebar-foot .warn{color:#ff7b72}
 h1:hover .anchor,h2:hover .anchor,h3:hover .anchor,h4:hover .anchor,
 h5:hover .anchor,h6:hover .anchor{opacity:.55}
 .article p{margin:.75em 0}
+/* markdown.html=innerhtml 时，块级标签会让浏览器在 <p> 里自动收尾，留下空段落；隐藏掉 */
+.article p:empty{display:none}
 .article ul,.article ol{margin:.7em 0; padding-left:1.9em}
 .article li{margin:.3em 0}
 .article li>ul,.article li>ol{margin:.3em 0}

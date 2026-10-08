@@ -3,7 +3,12 @@
    支持：ATX 标题、段落、围栏代码块、缩进代码块、引用、有序/无序列表
         （含嵌套与任务列表）、GFM 表格（含对齐）、水平线、
         行内 code/粗体/斜体/删除线/链接/图片/自动链接。
-   不解析原始 HTML（按纯文本转义输出），避免文档注入脚本。
+   正文里的 HTML 由 ctx.html 控制，三种模式（默认 escape = 不解析原始 HTML，
+   避免文档注入脚本）：
+     escape    —— 按纯文本转义显示
+     innerhtml —— 原样输出给浏览器渲染（信任文档的选项）
+     strip     —— 吃掉标签/注释、只保留被包裹的内容
+                  （<br>→换行、<img>→图片、常见实体解码；代码块与行内代码不受影响）
    围栏里写 mermaid 时不算代码：调用方在 ctx 里传了 mermaid（MermaidCore.make(cfg)）
    就改输出图表块（见 assets/mermaid-core.js），没传就照旧当普通代码块。
    ===================================================================== */
@@ -24,16 +29,60 @@ var MarkdownCore = (function () {
   function attr(s) {
     return esc(s).replace(/"/g, '&quot;');
   }
+
+  /* ---------- 正文 HTML 模式 ---------- */
+  function htmlMode(ctx) {
+    var m = ctx && ctx.html;
+    return m === 'innerhtml' || m === 'strip' ? m : 'escape';
+  }
+  /* 属性值来自已经过 esc() 的字符串，只需再防引号（& < > 已是实体形式） */
+  function quote(v) { return String(v).replace(/"/g, '&quot;'); }
+  function tagAttr(tag, name) {
+    var re = new RegExp('(?:^|[\\s])' + name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s&]+))', 'i');
+    var m = re.exec(tag);
+    if (!m) return null;
+    return m[1] !== undefined ? m[1] : m[2] !== undefined ? m[2] : m[3];
+  }
+  var ENTITIES = {
+    amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0',
+    ensp: '\u2002', emsp: '\u2003', thinsp: '\u2009', middot: '\u00b7', bull: '\u2022',
+    mdash: '\u2014', ndash: '\u2013', hellip: '\u2026', laquo: '\u00ab', raquo: '\u00bb',
+    ldquo: '\u201c', rdquo: '\u201d', lsquo: '\u2018', rsquo: '\u2019',
+    copy: '\u00a9', reg: '\u00ae', trade: '\u2122', deg: '\u00b0', times: '\u00d7',
+    sect: '\u00a7', para: '\u00b6', dagger: '\u2020', permil: '\u2030',
+    euro: '\u20ac', pound: '\u00a3', yen: '\u00a5', cent: '\u00a2'
+  };
+  /* 实体解码成字符：&#123; / &#x1F; 与常见命名实体；不认识的保持原样 */
+  function decodeEntities(s) {
+    return String(s).replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, function (m, name) {
+      if (name.charAt(0) === '#') {
+        var cp = (name.charAt(1) === 'x' || name.charAt(1) === 'X')
+          ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+        return (cp >= 0 && cp <= 0x10FFFF) ? String.fromCodePoint(cp) : m;
+      }
+      var v = ENTITIES[name] !== undefined ? ENTITIES[name] : ENTITIES[name.toLowerCase()];
+      return v !== undefined ? v : m;
+    });
+  }
+  /* strip 模式用于 plain()（原始文本）：去掉注释与标签、解码实体，供目录/摘要/编号提取 */
+  function stripMarkup(s) {
+    return decodeEntities(String(s)
+      .replace(/<!--[^]*?-->/g, '')
+      .replace(/<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^]*?)?\/?>/g, ''));
+  }
+
   /* 去掉行内标记，用于生成 slug / 提取标题编号 */
-  function plain(s) {
-    return String(s)
+  function plain(s, mode) {
+    s = String(s);
+    if (mode === 'strip') s = stripMarkup(s);
+    return s
       .replace(/`([^`]*)`/g, '$1')
       .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
       .replace(/\*\*|__|~~|\*|_/g, '')
       .trim();
   }
-  function slugify(s, used) {
-    var base = plain(s).toLowerCase()
+  function slugify(s, used, mode) {
+    var base = plain(s, mode).toLowerCase()
       .replace(/[\s\u3000]+/g, '-')
       .replace(/[^\p{L}\p{N}\-_]/gu, '')
       .replace(/-{2,}/g, '-')
@@ -45,8 +94,8 @@ var MarkdownCore = (function () {
     return id;
   }
   /* 标题前的编号，如 "5.3 内部需…" -> "5.3"，用于 §引用跳转 */
-  function headingNumber(text) {
-    var m = /^\s*(\d+(?:\.\d+)*)/.exec(plain(text));
+  function headingNumber(text, mode) {
+    var m = /^\s*(\d+(?:\.\d+)*)/.exec(plain(text, mode));
     return m ? m[1] : null;
   }
 
@@ -96,7 +145,7 @@ var MarkdownCore = (function () {
   var RE_CJK = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f]/;
 
   /* 扫描标题（跳过代码围栏），标题 id 与正文渲染时使用的 id 完全一致 */
-  function scanHeadings(md) {
+  function scanHeadings(md, mode) {
     var lines = String(md).replace(/\r\n?/g, '\n').split('\n');
     var out = [], used = {}, fence = null;
     for (var i = 0; i < lines.length; i++) {
@@ -112,8 +161,8 @@ var MarkdownCore = (function () {
       out.push({
         level: m[1].length,
         text: m[2],
-        id: slugify(m[2], used),
-        num: headingNumber(m[2])
+        id: slugify(m[2], used, mode),
+        num: headingNumber(m[2], mode)
       });
     }
     return out;
@@ -122,6 +171,7 @@ var MarkdownCore = (function () {
   /* ---------- 行内渲染 ---------- */
   function inline(src, ctx, depth) {
     depth = depth || 0;
+    var mode = htmlMode(ctx);
     var stash = [];
     function put(html) { stash.push(html); return '\u0000' + (stash.length - 1) + '\u0000'; }
     /* 跨文档章节引用：拿目标文档的「编号 -> 锚点 id」表；目标里没有这个编号时
@@ -204,6 +254,24 @@ var MarkdownCore = (function () {
       return put('<a href="' + attr(url) + '" target="_blank" rel="noopener noreferrer">' + url + '</a>');
     });
 
+    // ---- strip：吃掉 HTML 标签/注释，只保留被包裹的内容 ----
+    // 此时行内代码、链接等已进 stash（占位符不参与这里的替换），实体解码放在标签
+    // 之后做，避免 &lt;script&gt; 这种"用实体转义出来的标签"被当成真标签吃掉。
+    if (mode === 'strip') {
+      s = s.replace(/&lt;!--[^]*?--&gt;/g, '');                        // 注释整条吃掉
+      s = s.replace(/&lt;(script|style)\b[^]*?&gt;[^]*?&lt;\/\1\s*&gt;/gi, '');   // script/style 连内容整段移除
+      s = s.replace(/&lt;img\b[^]*?&gt;/gi, function (m) {             // <img> → 图片，相对路径按当前文档解析
+        var src2 = tagAttr(m, 'src');
+        if (!src2) return '';
+        var alt = tagAttr(m, 'alt') || '';
+        var url = ctx && ctx.resolveAsset ? ctx.resolveAsset(src2) : src2;
+        return put('<img src="' + quote(url) + '" alt="' + quote(alt) + '" loading="lazy">');
+      });
+      s = s.replace(/&lt;br\b[^]*?&gt;/gi, '  \n');                    // <br> → 换行（沿用行尾两空格的硬换行处理）
+      s = s.replace(/&lt;\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^]*?)?\/?&gt;/g, '');   // 其余标签吃掉
+      s = s.replace(/&amp;(?=[a-zA-Z][a-zA-Z0-9]*;|#[0-9]+;|#[xX][0-9a-fA-F]+;)/g, '&');   // 实体解码
+    }
+
     // 强调：先强后弱，避免 ** 被拆开
     s = s.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/(^|[^\w])__(?=\S)([\s\S]*?\S)__(?=$|[^\w])/g, '$1<strong>$2</strong>');
@@ -214,6 +282,16 @@ var MarkdownCore = (function () {
     // 硬换行（行尾两个空格）优先于软换行折叠
     s = s.replace(/ {2,}\n/g, '<br>\n');
     s = s.replace(/\n/g, ' ');
+
+    // ---- innerhtml：把"长得像标签/注释"的转义序列还原成原样输出，交给浏览器渲染 ----
+    // 只放行形状像标签的（标签名 + 可选属性，或整条注释），`a < b`、<user@example.com>
+    // 这类不规则的仍按纯文本转义显示；行内代码/链接等已进 stash，不会被还原。
+    // 实体解码放在标签还原之后：文档里自己写 &lt;script&gt; 表示"显示这段文字"，
+    // 还原前它不满足标签形状、不会被误放行成真标签。
+    if (mode === 'innerhtml') {
+      s = s.replace(/&lt;(\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^]*?)?\/?|!--[^]*?--)&gt;/g, '<$1>');
+      s = s.replace(/&amp;(?=[a-zA-Z][a-zA-Z0-9]*;|#[0-9]+;|#[xX][0-9a-fA-F]+;)/g, '&');
+    }
 
     return s.replace(/\u0000(\d+)\u0000/g, function (m, i) { return stash[+i]; });
   }
@@ -385,8 +463,8 @@ var MarkdownCore = (function () {
         var lvl = hm[1].length;
         var h = ctx.headings[ctx.hIndex];
         var id;
-        if (h && plain(h.text) === plain(hm[2])) { id = h.id; ctx.hIndex++; }
-        else { id = slugify(hm[2], ctx.usedSlugs); }
+        if (h && plain(h.text, ctx.html) === plain(hm[2], ctx.html)) { id = h.id; ctx.hIndex++; }
+        else { id = slugify(hm[2], ctx.usedSlugs, ctx.html); }
         out += '<h' + lvl + ' id="' + attr(id) + '">' +
           '<a class="anchor" href="' + attr(ctx.docHref(ctx.docPath, id)) + '" aria-hidden="true">#</a>' +
           inline(hm[2], ctx) + '</h' + lvl + '>';
@@ -446,13 +524,16 @@ var MarkdownCore = (function () {
       // 段落
       var pbuf = [line]; i++;
       while (i < lines.length && lines[i].trim() && !startsBlock(lines[i], false)) { pbuf.push(lines[i]); i++; }
-      out += '<p>' + inline(softJoin(pbuf), ctx) + '</p>';
+      var pbody = inline(softJoin(pbuf), ctx);
+      // strip 模式下只有 HTML 标签的行会被吃空：不再输出空段落
+      if (pbody.trim() || ctx.html !== 'strip') out += '<p>' + pbody + '</p>';
     }
     return out;
   }
 
   function render(md, ctx) {
     ctx = Object.assign({ usedSlugs: {}, hIndex: 0 }, ctx || {});
+    ctx.html = htmlMode(ctx);                       // 归一化：未知值按 escape
     var src = String(md).replace(/\r\n?/g, '\n');
     // 文首声明：调用方（浏览器）可以传入已经解析成真实路径的 refs，否则这里自己解一遍
     var lineSet = ctx.declLines || null;
@@ -470,7 +551,7 @@ var MarkdownCore = (function () {
       aliases.sort(function (a, b) { return b.length - a.length; });
       ctx.aliasRe = new RegExp('(' + aliases.map(reEsc).join('|') + ')[ \\t]*§[ \\t]?(\\d+(?:\\.\\d+)*)', 'g');
     }
-    ctx.headings = scanHeadings(src);
+    ctx.headings = scanHeadings(src, ctx.html);
     ctx.sectionMap = {};
     for (var i = 0; i < ctx.headings.length; i++) {
       var h = ctx.headings[i];

@@ -328,5 +328,113 @@ const fence = Core.render('文本\n\n```\n# 不是标题\n**原样**\n```\n\n尾
 if (fence.headings.length === 0 && fence.html.includes('# 不是标题')) console.log('v 围栏代码块内不解析标题/强调');
 else { console.log('x 围栏代码块处理异常: ' + fence.html); fail++; }
 
+/* ---------- 正文 HTML 三种模式（config.json 的 markdown.html） ---------- */
+{
+  const HTML_MD = [
+    '# 5.3 注意事项 & 提示',
+    '',
+    '<div class="note">',
+    '第一行<br>第二行',
+    '<!-- 内部备注 -->',
+    '</div>',
+    '',
+    '<script>alert(1)</script>',
+    '',
+    '看图 <img src="images/shot.png" alt="截图"> 效果。',
+    '',
+    '实体：&nbsp;结尾，AT&T 不动，&#65; 是 A。',
+    '',
+    '伪标签：a < b 与 <user@example.com> 都不是标签。',
+    '',
+    '行内 `<div>` 与围栏：',
+    '',
+    '```html',
+    '<div>围栏源码</div>',
+    '```',
+    '',
+    '只包标签的段落：',
+    '',
+    '<hr>',
+    '',
+    '彩色 <span style="color:red">红色</span> 结束。',
+    '',
+    '转义写法 &lt;script&gt;alert(2)&lt;/script&gt; 保持文字。',
+  ].join('\n');
+  const htmlCtx = (mode) => Object.assign(makeCtx('docs/x.md'), { html: mode });
+
+  /* 认不出的值按 escape 处理 */
+  {
+    const a = Core.render(HTML_MD, makeCtx('docs/x.md')).html;
+    const b = Core.render(HTML_MD, htmlCtx('RAW')).html;
+    if (a === b) console.log('v markdown.html 未知值退回 escape');
+    else { console.log('x 未知的 markdown.html 值没有退回 escape'); fail++; }
+  }
+
+  /* escape：默认行为与以前一致 */
+  {
+    const h = Core.render(HTML_MD, htmlCtx('escape')).html;
+    const okE = h.includes('&lt;div class="note"&gt;') && h.includes('&lt;script&gt;') &&
+      h.includes('&lt;br&gt;') && h.includes('&lt;!-- 内部备注 --&gt;') && h.includes('&amp;nbsp;');
+    if (okE) console.log('v markdown.html=escape：标签按文字转义显示（默认行为不变）');
+    else { console.log('x escape 模式异常: ' + h.slice(0, 200)); fail++; }
+  }
+
+  /* strip：吃掉标签只留内容 */
+  {
+    const h = Core.render(HTML_MD, htmlCtx('strip')).html;
+    const cases = [
+      ['div 包装被吃掉、内容保留', !h.includes('class="note"') && h.includes('注意事项 &amp; 提示')],
+      ['<br> 变换行且不残留空格噪声', /第一行<br>[ \n]*第二行/.test(h)],
+      ['HTML 注释整条消失', !h.includes('内部备注')],
+      ['<script> 连内容一起消失', !h.includes('alert(1)') && !/<script/i.test(h)],
+      ['<img> 变图片（相对路径保留、alt 带过来）', h.includes('<img src="images/shot.png" alt="截图"')],
+      ['实体解码、AT&T 保持显示原样', h.includes('&nbsp;结尾') && h.includes('AT&amp;T') && h.includes('&#65; 是 A')],
+      ['伪标签不动', h.includes('a &lt; b') && h.includes('&lt;user@example.com&gt;')],
+      ['行内代码与围栏内 HTML 不参与', h.includes('<code>&lt;div&gt;</code>') &&
+        /<pre class="code"><code class="language-html">&lt;div&gt;围栏源码&lt;\/div&gt;/.test(h)],
+      ['被吃空的段落不输出空 <p>', !/<p><\/p>/.test(h)],
+      ['行内标签只留内容', h.includes('彩色 红色 结束。')],
+    ];
+    let okN = 0;
+    for (const [label, ok] of cases) {
+      if (ok) okN++;
+      else { console.log(`x strip 模式：${label}`); fail++; }
+    }
+    if (okN === cases.length) console.log(`v markdown.html=strip：${okN} 项断言全过`);
+  }
+
+  /* innerhtml：原样输出交给浏览器 */
+  {
+    const h = Core.render(HTML_MD, htmlCtx('innerhtml')).html;
+    const cases = [
+      ['标签原样还原', h.includes('<div class="note">') && h.includes('<span style="color:red">')],
+      ['原始 <script> 原样输出（可信文档才开）', (h.match(/<script/gi) || []).length === 1],
+      ['实体透传', h.includes('&nbsp;结尾') && h.includes('&#65; 是 A')],
+      ['伪标签不还原成真标签', h.includes('a &lt; b') && h.includes('&lt;user@example.com&gt;')],
+      ['实体写法 &lt;script&gt; 保持文字', h.includes('&lt;script&gt;alert(2)&lt;/script&gt;')],
+      ['行内代码与围栏内 HTML 不参与', h.includes('<code>&lt;div&gt;</code>') &&
+        /<pre class="code"><code class="language-html">&lt;div&gt;围栏源码&lt;\/div&gt;/.test(h)],
+    ];
+    let okN = 0;
+    for (const [label, ok] of cases) {
+      if (ok) okN++;
+      else { console.log(`x innerhtml 模式：${label}`); fail++; }
+    }
+    if (okN === cases.length) console.log(`v markdown.html=innerhtml：${okN} 项断言全过`);
+  }
+
+  /* 模式要贯穿标题扫描：strip 下目录文字取「内容」，id 与正文渲染一致 */
+  {
+    const hs = Core.scanHeadings('# <b>标题</b>\n', 'strip');
+    const full = Core.render('# <b>标题</b>\n\n正文\n', htmlCtx('strip'));
+    const okS = hs.length === 1 && hs[0].text === '<b>标题</b>' && hs[0].id === '标题' &&
+      Core.plain(hs[0].text, 'strip') === '标题' && Core.plain(hs[0].text, 'escape') === '<b>标题</b>' &&
+      full.headings[0].id === '标题' && full.html.includes('id="标题"') &&
+      Core.plain('<b>x</b>', 'strip') === 'x' && Core.plain('<b>x</b>', 'escape') === '<b>x</b>';
+    if (okS) console.log('v strip 模式下标题扫描/目录文字/锚点 id 与正文一致');
+    else { console.log('x strip 模式下标题扫描不一致: ' + JSON.stringify(hs)); fail++; }
+  }
+}
+
 console.log(fail ? `\n===== 失败 ${fail} 项 =====` : '\n===== 全部通过 =====');
 process.exit(fail ? 1 : 0);
