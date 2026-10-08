@@ -5,3 +5,4 @@ test/shots/
 # 实时版页面：由 page.template.html 生成，只在 node build-docs.mjs --serve 时刷新，
 # 属于每次启动都能重建的产物，不需要提交（离线版 md-viewer.html 才需要提交）。
 index.html
+md-viewer.html
