@@ -307,15 +307,44 @@ const SUMMARY = `(function(){
     const full = await cdp.ev(`(function(){
       var el = document.querySelector('.mg-block.mg-full');
       var r = el ? el.getBoundingClientRect() : null;
+      /* 图在窗口里「真的画出来多大」：内容 bbox 过一遍 getScreenCTM 换成屏幕像素。
+         只量 svg 元素盒子不够——它可能撑满了，画面却缩在角落里。 */
+      var svg = el ? el.querySelector('.mg-host > svg') : null;
+      var drawn = null, avail = null, scale = null;
+      if (svg) {
+        try {
+          var bb = svg.getBBox(), m = svg.getScreenCTM();
+          var pts = [[bb.x,bb.y],[bb.x+bb.width,bb.y],[bb.x,bb.y+bb.height],[bb.x+bb.width,bb.y+bb.height]]
+            .map(function(p){ return { x: m.a*p[0]+m.c*p[1]+m.e, y: m.b*p[0]+m.d*p[1]+m.f }; });
+          var xs = pts.map(function(p){ return p.x; }), ys = pts.map(function(p){ return p.y; });
+          drawn = [Math.round(Math.max.apply(null,xs)-Math.min.apply(null,xs)), Math.round(Math.max.apply(null,ys)-Math.min.apply(null,ys))];
+          scale = [Math.round(m.a*1000)/1000, Math.round(m.d*1000)/1000];   // 等比缩放时两者相等
+        } catch (e) {}
+        var body = el.querySelector('.mg-body'), br = body.getBoundingClientRect(), bs = getComputedStyle(body);
+        avail = [Math.round(br.width - parseFloat(bs.paddingLeft) - parseFloat(bs.paddingRight)),
+                 Math.round(br.height - parseFloat(bs.paddingTop) - parseFloat(bs.paddingBottom))];
+      }
       return { count: document.querySelectorAll('.mg-block.mg-full').length,
                lockOn: document.documentElement.classList.contains('mg-full-on'),
                api: window.__mdvDebug.mermaidFullscreen(),
                text: el ? el.querySelector('[data-mg-act="full"]').textContent : '',
                w: r ? Math.round(r.width) : 0, h: r ? Math.round(r.height) : 0,
-               vw: window.innerWidth, vh: window.innerHeight };
+               vw: window.innerWidth, vh: window.innerHeight,
+               drawn: drawn, avail: avail, scale: scale };
     })()`);
     check('全屏后那一块铺满窗口（其它块不受影响）',
       full.count === 1 && full.api === true && full.w >= full.vw - 4 && full.h >= full.vh - 4, JSON.stringify(full));
+    /* 全屏的意义就是「看得更大」：图要按容器等比放大到放得下的最大尺寸。
+       曾经的坑：mermaid 的 svg 没有 intrinsic 宽高，放开 max-width 后会退回替换元素
+       默认的 300×150，于是周围全是空白、图还是很小的（回归见 git 历史）。 */
+    check('全屏后图按比例放大到接近可用空间（顶满能顶的那一轴，不超出）',
+      !!full.drawn && !!full.avail &&
+      Math.max(full.drawn[0] / full.avail[0], full.drawn[1] / full.avail[1]) >= 0.9 &&
+      full.drawn[0] <= full.avail[0] + 2 && full.drawn[1] <= full.avail[1] + 2,
+      JSON.stringify({ drawn: full.drawn, avail: full.avail }));
+    check('放大是等比的（横竖缩放系数一致，没有拉变形）',
+      !!full.scale && Math.abs(Math.abs(full.scale[0]) - Math.abs(full.scale[1])) < 0.01,
+      JSON.stringify(full.scale));
     check('全屏时锁住页面滚动', full.lockOn === true);
     check('按钮文案变成「退出全屏」', full.text === '退出全屏', full.text);
     await cdp.shot('31-mermaid-fullscreen.png');

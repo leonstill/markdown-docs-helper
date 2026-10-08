@@ -1352,9 +1352,12 @@
         sel + '.edgeLabel > .label > foreignObject{overflow:visible !important;}',
       /* 外层的 <g class="label"> 带 transform，盒模型撑不开它：标签底片的留白
          由 mgPadLabels() 从测量值直接算（往 transform 里补 offset）。 */
-      /* 箭头：细长倒钩加一点描边，读起来更接近实心三角 */
-      sel + '[id$="stateDiagram-barbEnd"] path{stroke-linejoin:miter !important;stroke-width:' + s.markerStroke + ' !important;}',
-      sel + '[id$="flowchart-v2-pointEnd"] path,' + sel + '[id$="flowchart-v2-pointStart"] path{stroke-width:' + s.markerStroke + ' !important;}',
+      /* 箭头：细长倒钩加一点描边，读起来更接近实心三角。
+         选择器必须用 [id*=...]：引擎每个类型都会 emit 两个 id —— `...End` 与
+         `...End-margin`（两者 markerUnits 不同），连线实际引用的是 `-margin` 那个，
+         [id$=...] 一个都收不到。详见 mgTuneMarkers 的注释。 */
+      sel + '[id*="stateDiagram-barbEnd"] path{stroke-linejoin:miter !important;stroke-width:' + s.markerStroke + ' !important;}',
+      sel + '[id*="flowchart-v2-pointEnd"] path,' + sel + '[id*="flowchart-v2-pointStart"] path{stroke-width:' + s.markerStroke + ' !important;}',
       /* 流程图节点也统一成同一套观感 */
       sel + '.flowchart-link{stroke-width:' + s.edgeW + ' !important;}',
       sel + '.node rect,' + sel + '.node circle,' + sel + '.node ellipse,' + sel + '.node polygon,' + sel + '.node path{stroke-width:' + s.nodeW + 'px !important;}'
@@ -1364,18 +1367,51 @@
     style.textContent += '\n/* markdown-docs-helper：图表样式 */\n' + css + '\n';
     return svg;
   }
-  /* 箭头：把状态图的 barbEnd 缩到参考图那种实心三角的观感（只动几何，不换 marker） */
+  /* 箭头：把状态图的 barbEnd 缩成参考图那种紧实小三角（只动观感，不换 marker）。
+     四个坑，缺一个这套微调就是白写（都是实测出来的，别照直觉改）：
+       1. 选择器必须用 [id*=...]。引擎每个类型都 emit 两个 marker：`...End`（markerUnits=
+          strokeWidth）和 `...End-margin`（markerUnits=userSpaceOnUse），**连线引用的永远是
+          `-margin` 那个**（实测有标签、没标签的边都走它，`...End` 是死代码）。用 [id$=...]
+          谁都收不到 —— 之前的微调就是这么失效的。
+       2. 不能只在 <defs> 里找。引擎把 `...End` 塞进 `<g><defs>`，把真正被引用的
+          `...End-margin` 挂在别处，所以要在整张 svg 里找（原来的代码只查 defs，
+          于是把尺寸全改到了没人用的那个 marker 上）。
+       3. marker 的视口（markerWidth/markerHeight）就是裁剪框，默认 overflow:hidden：
+          barb 的路径画在 x=11..19，只把视口收到 13 会把尖头切掉（像素级实测：箭头顶不到
+          线头，变成一个贴在线上、后面还露一截线的楔子）。所以缩的时候**路径连同 refX/refY
+          一起缩**，并且把 overflow 打开 —— 这几个 marker 里就一个箭头，宁可让它画满。
+       4. 描边宽度得走注入的 CSS（带 !important）：marker 的 stroke-width 会被 mermaid 自己的
+          样式段压成 0（flowchart 的 pointEnd 就是 0），setAttribute 斗不过它。
+     另外把两个变体的 markerUnits 统一成 userSpaceOnUse：箭头大小就不随连线粗细跑。 */
+  var MG_ARROW_SCALE = 0.65;                    // 路径与 refX/refY 的等比缩放
+  var MG_ARROW_W = 13, MG_ARROW_H = 11;         // 视口（缩完的路径是 5.2×9.1）
   function mgTuneMarkers(svg) {
     if (!svg || mgStyleName() !== 'doc') return svg;
-    var defs = svg.querySelector('defs');
-    if (!defs) return svg;
     var preset = (mermaidThemeName() === 'dark') ? MG_STYLE_DOC.dark : MG_STYLE_DOC.light;
-    var barb = defs.querySelector('marker[id$="stateDiagram-barbEnd"]');
-    if (barb) {
-      barb.setAttribute('markerWidth', '13');
-      barb.setAttribute('markerHeight', '11');
-      var p = barb.querySelector('path');
-      if (p) p.setAttribute('stroke', preset.marker);
+    var heads = svg.querySelectorAll('marker[id*="stateDiagram-barbEnd"],' +
+      'marker[id*="flowchart-v2-pointEnd"],marker[id*="flowchart-v2-pointStart"]');
+    var round2 = function (n) { return Math.round(n * 100) / 100; };
+    for (var i = 0; i < heads.length; i++) {
+      var mk = heads[i];
+      var p = mk.querySelector('path');
+      if (!p) continue;
+      p.setAttribute('fill', preset.marker);      // 深色下跟连线一起变浅
+      p.setAttribute('stroke', preset.marker);    // 没有描边颜色时，加宽 stroke-width 是白加
+      p.setAttribute('stroke-linejoin', 'miter');
+      /* 别让视口把描边切掉半个（flowchart 的箭头是实心三角，视口正好贴着它） */
+      mk.setAttribute('overflow', 'visible');
+      /* 流程图的 pointEnd 本来就是实心三角（自己带 viewBox），只补描边、不动几何 */
+      if (mk.id.indexOf('stateDiagram-barbEnd') < 0) continue;
+      p.setAttribute('d', String(p.getAttribute('d')).replace(/-?\d+(?:\.\d+)?/g, function (n) {
+        return round2(parseFloat(n) * MG_ARROW_SCALE);
+      }));
+      var refX = parseFloat(mk.getAttribute('refX'));
+      var refY = parseFloat(mk.getAttribute('refY'));
+      if (isFinite(refX)) mk.setAttribute('refX', String(round2(refX * MG_ARROW_SCALE)));
+      if (isFinite(refY)) mk.setAttribute('refY', String(round2(refY * MG_ARROW_SCALE)));
+      mk.setAttribute('markerWidth', String(MG_ARROW_W));
+      mk.setAttribute('markerHeight', String(MG_ARROW_H));
+      mk.setAttribute('markerUnits', 'userSpaceOnUse');
     }
     return svg;
   }

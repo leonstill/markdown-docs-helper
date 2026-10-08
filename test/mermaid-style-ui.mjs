@@ -125,7 +125,40 @@ const PROBE = `(function(){
       foScrollW: fo ? fo.scrollWidth : null,
       foH: fo ? Number(fo.getAttribute('height')) : null,
       foScrollH: fo ? fo.scrollHeight : null,
-      markerW: (function(){ var m = svg.querySelector('marker[id$="stateDiagram-barbEnd"]'); return m ? m.getAttribute('markerWidth') : null; })()
+      /* 连线**实际引用**的那个 marker（引擎给的是 -margin 变体）被微调成了什么样。
+         注意：不能按 id 后缀去猜「哪个是箭头」——引擎每类都 emit 两个 id，只有 -margin
+         那个会被引用（见 assets/md-app.js 里 mgTuneMarkers 的注释）。 */
+      arrow: (function(){
+        var edge = svg.querySelector('[marker-end]');
+        var v = edge ? String(edge.getAttribute('marker-end') || '') : '';
+        /* 这段是放在模板字符串里的，正则里的反斜杠会被吃掉 —— 用字符串切，别用正则 */
+        var at = v.indexOf('url(#');
+        var ref = (at >= 0 && v.lastIndexOf(')') > at) ? v.slice(at + 5, v.lastIndexOf(')')) : null;
+        var mk = ref ? svg.querySelector('marker[id="' + ref + '"]') : null;
+        if (!mk) return { ref: ref || null, found: false };
+        var p = mk.querySelector('path');
+        var bb = null;
+        try { bb = p ? p.getBBox() : null; } catch (e) {}
+        var vw = parseFloat(mk.getAttribute('markerWidth'));
+        var vh = parseFloat(mk.getAttribute('markerHeight'));
+        var sw = p ? parseFloat(getComputedStyle(p).strokeWidth) || 0 : 0;
+        var hasVB = !!mk.getAttribute('viewBox');
+        /* 视口就是裁剪框，但 overflow:visible 时不裁 —— 两种都算「没被切」 */
+        var noClip = hasVB || mk.getAttribute('overflow') === 'visible' ||
+          getComputedStyle(mk).overflow === 'visible';
+        return {
+          ref: ref, found: true,
+          w: mk.getAttribute('markerWidth'), h: mk.getAttribute('markerHeight'),
+          units: mk.getAttribute('markerUnits'), viewBox: mk.getAttribute('viewBox'),
+          overflow: mk.getAttribute('overflow') || getComputedStyle(mk).overflow,
+          strokeW: p ? getComputedStyle(p).strokeWidth : null,
+          stroke: p ? getComputedStyle(p).stroke : null,
+          join: p ? getComputedStyle(p).strokeLinejoin : null,
+          pathBox: bb ? [+bb.width.toFixed(2), +bb.height.toFixed(2)] : null,
+          clipped: !!(bb && !noClip && (bb.x - sw / 2 < -0.01 || bb.y - sw / 2 < -0.01 ||
+            bb.x + bb.width + sw / 2 > vw + 0.01 || bb.y + bb.height + sw / 2 > vh + 0.01))
+        };
+      })()
     };
   }
   return { count: blocks.length, blocks: [].map.call(blocks, metrics) };
@@ -177,7 +210,10 @@ const READY = `(function(){
     cdp.events.length = 0;
     check('文档打开并画完所有图', await openDemo());
     let m = await cdp.ev(PROBE);
-    console.log('   ' + JSON.stringify(m.blocks.map((b) => ({ k: b.kind, css: b.hasCss, rx: b.nodeRx, sw: b.nodeSW, edge: b.edgeSW, bg: b.labelBg, mk: b.markerW }))));
+    console.log('   ' + JSON.stringify(m.blocks.map((b) => ({
+      k: b.kind, css: b.hasCss, rx: b.nodeRx, sw: b.nodeSW, edge: b.edgeSW, bg: b.labelBg,
+      arrow: b.arrow && b.arrow.found ? `${b.arrow.w}x${b.arrow.h} ${b.arrow.strokeW} ${b.arrow.overflow}` : b.arrow && b.arrow.ref
+    }))));
     const state = firstOf(m, 'statediagram-v2');
     const flow = firstOf(m, 'flowchart');
     check('状态图与流程图都画出来了（4 张状态图 + 1 张流程图）',
@@ -187,7 +223,20 @@ const READY = `(function(){
     check('状态图：节点描边 1.6px', state.nodeSW === '1.6px', state.nodeSW);
     check('状态图：连线 1.6', parseFloat(state.edgeSW) === 1.6, state.edgeSW);
     check('状态图：标签底片是不透明浅灰', state.labelBg === 'rgb(240, 240, 240)', state.labelBg);
-    check('状态图：箭头 marker 缩到 13×11', state.markerW === '13', state.markerW);
+    /* 箭头这条最容易默默失效：引擎每类 emit 两个 marker id（`...End` 与 `...End-margin`），
+       真正被引用的是 `-margin` 那个，而且它不在 <defs> 里。所以这里必须查「连线引用的那个」。 */
+    check('状态图：微调落在连线实际引用的 marker 上（`-margin` 变体，缩到 13×11）',
+      state.arrow.found && /barbEnd-margin$/.test(state.arrow.ref || '') &&
+      state.arrow.w === '13' && state.arrow.h === '11' && state.arrow.units === 'userSpaceOnUse',
+      JSON.stringify(state.arrow));
+    check('状态图：箭头加了一圈 1.1 的描边（细倒钩才读得成实心小三角）',
+      parseFloat(state.arrow.strokeW) === 1.1 && state.arrow.join === 'miter' &&
+      /^rgb\(/.test(state.arrow.stroke || ''),
+      `strokeW=${state.arrow.strokeW} join=${state.arrow.join} stroke=${state.arrow.stroke}`);
+    check('状态图：箭头没有被自己的视口切掉（视口就是裁剪框，见 overflow:visible）',
+      state.arrow.clipped === false && state.arrow.pathBox &&
+      state.arrow.pathBox[0] < 13 && state.arrow.pathBox[1] < 11,
+      JSON.stringify(state.arrow));
     check('状态图：标签没被截字（底片装得下文字）',
       state.foW >= state.foScrollW - 0.5 && state.foH >= state.foScrollH - 0.5,
       `fo=${state.foW}x${state.foH} scroll=${state.foScrollW}x${state.foScrollH}`);
@@ -195,6 +244,9 @@ const READY = `(function(){
       JSON.stringify(state.labelText));
     check('流程图：也套上了同一套线宽', flow.hasCss === true && parseFloat(flow.edgeSW) === 1.6,
       `css=${flow.hasCss} edge=${flow.edgeSW}`);
+    check('流程图：箭头也补上了描边（几何不动，它本来就是实心三角）',
+      parseFloat(flow.arrow.strokeW) === 1.1 && flow.arrow.units === 'userSpaceOnUse',
+      JSON.stringify(flow.arrow));
     check('无 console 错误', cdp.errors().length === 0, cdp.errors().join('; '));
 
     console.log('\n--- B. style=plain 回到 mermaid 原样 ---');
@@ -210,7 +262,14 @@ const READY = `(function(){
     check('plain：圆角回到 5px', p0.nodeRx === '5px', p0.nodeRx);
     check('plain：节点描边回到 1px', p0.nodeSW === '1px', p0.nodeSW);
     check('plain：连线回到 1', parseFloat(p0.edgeSW) === 1, p0.edgeSW);
-    check('plain：箭头 marker 回到 20', p0.markerW === '20', p0.markerW);
+    /* 箭头在 plain 下必须回到 mermaid 原样：20×14 的细长倒钩，没有那圈描边 */
+    check('plain：箭头回到 mermaid 原样（20×14，没有那圈描边）',
+      p0.arrow.found && p0.arrow.w === '20' && p0.arrow.h === '14' && parseFloat(p0.arrow.strokeW) < 1.1,
+      JSON.stringify(p0.arrow));
+    check('plain：箭头比 doc 的大（doc 缩到约 2/3、再补描边）',
+      p0.arrow.pathBox && state.arrow.pathBox && p0.arrow.pathBox[0] > state.arrow.pathBox[0] * 1.3 &&
+      p0.arrow.pathBox[1] > state.arrow.pathBox[1] * 1.3,
+      `plain=${JSON.stringify(p0.arrow.pathBox)} doc=${JSON.stringify(state.arrow.pathBox)}`);
     check('plain：无 console 错误', cdp.errors().length === 0, cdp.errors().join('; '));
 
     console.log('\n--- C. 深色主题 ---');
@@ -226,6 +285,8 @@ const READY = `(function(){
     check('深色：节点底色换成深紫', d0.nodeFill === 'rgb(35, 35, 56)', d0.nodeFill);
     check('深色：标签底片换成深色底', d0.labelBg === 'rgb(28, 33, 40)', d0.labelBg);
     check('深色：线宽保持 1.6', d0.nodeSW === '1.6px', d0.nodeSW);
+    check('深色：箭头跟着换成浅色（描边色也走主题变量）',
+      d0.arrow.stroke === 'rgb(154, 164, 178)' && d0.arrow.clipped === false, JSON.stringify(d0.arrow));
     await cdp.ev("document.getElementById('themeBtn').click()");
     await cdp.waitFor(READY);
     check('切回浅色后无 console 错误', cdp.errors().length === 0, cdp.errors().join('; '));
@@ -235,9 +296,22 @@ const READY = `(function(){
     const svgTxt = await cdp.ev(`window.__mdvDebug.exportMermaidSvg(0).text()`);
     check('导出 SVG 里带着样式段', svgTxt.indexOf('markdown-docs-helper') >= 0);
     check('导出 SVG 里圆角是 10px', /rx:10px\s*!important/.test(svgTxt), svgTxt.slice(0, 60));
-    check('导出 SVG 里 marker 已缩到 13', /markerWidth="13"/.test(svgTxt));
-    check('导出 SVG 里 marker 引用仍然有效',
-      /marker-end="url\(#mg-\d+_stateDiagram-barbEnd\)"/.test(svgTxt) && /id="mg-\d+_stateDiagram-barbEnd"/.test(svgTxt));
+    check('导出 SVG 里 marker 已缩到 13×11', /markerWidth="13"/.test(svgTxt) && /markerHeight="11"/.test(svgTxt));
+    check('导出 SVG 里箭头微调带得上（描边色 + miter，单独打开也对）',
+      /<marker [^>]*barbEnd[^>]*>[\s\S]{0,400}?stroke-linejoin="miter"/.test(svgTxt) &&
+      /\[id\*="stateDiagram-barbEnd"\] path\{[^}]*stroke-width/.test(svgTxt));
+    /* 之前这条断言写死了「引用的 id 一定是 `..._stateDiagram-barbEnd`」，
+       引擎升到 v11 之后引用变成了 `...barbEnd-margin`，于是它一直红着 ——
+       而真正该守的是「引用哪个 id，defs 里就得有那个 id」。 */
+    check('导出 SVG 里 marker 引用仍然有效（每个 marker-end 的 id 都在 defs 里）',
+      (function () {
+        const refs = svgTxt.match(/marker-(?:end|start)="url\(#[^)]+\)"/g) || [];
+        if (!refs.length) return false;
+        return refs.every((r) => {
+          const id = /url\(#([^)]+)\)/.exec(r)[1];
+          return svgTxt.indexOf('<marker id="' + id + '"') >= 0;
+        });
+      })(), 'refs=' + JSON.stringify((svgTxt.match(/marker-end="url\(#[^)]+\)"/g) || []).slice(0, 2)));
     check('导出后无 console 错误', cdp.errors().length === 0, cdp.errors().join('; '));
 
     console.log('\n--- E. 关掉 mermaid.enabled 时样式段也不该出现 ---');

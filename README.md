@@ -192,7 +192,8 @@ stateDiagram-v2
 - 围栏写法：`` ```mermaid ``、`` ~~~mermaid ``、`` ```{.mermaid} `` 都认，大小写不敏感，附加信息串
   （`` ```mermaid title="x" ``）忽略；`` ```mermaidfoo `` 这类不算。
 - 每张图右上角有工具栏：**源码**（就地摊开/收起）、**复制**、**SVG**（导出成文件）、**全屏**
-  （铺满窗口，<kbd>Esc</kbd> 退出）。语法写错时不会白屏：显示一条含 Mermaid 报错的提示，
+  （铺满窗口，图按比例放大到放得下的最大尺寸——宽图顶满宽度、高图顶满高度，<kbd>Esc</kbd> 退出）。
+  语法写错时不会白屏：显示一条含 Mermaid 报错的提示，
   下面自动摊开源码，同一篇文档里其它图表不受影响。
 - 主题跟随页面深浅色（切主题会重画；mermaid 的主题是画进 SVG 里的）。
 - 引擎是 [mermaid](https://github.com/mermaid-js/mermaid)（MIT），放在 `vendor/mermaid/`。
@@ -206,7 +207,7 @@ stateDiagram-v2
 "mermaid": {
   "enabled": true,             // false：围栏退回普通代码块，离线版也不再内联引擎
   "theme": "auto",             // auto 跟随页面深浅色，也可写 default/dark/forest/neutral/base
-  "style": "doc",              // doc：文档风（圆角浅紫胶囊 + 深灰粗连线 + 灰底标签）；plain：mermaid 原样
+  "style": "doc",              // doc：文档风（圆角浅紫胶囊 + 深灰粗连线 + 灰底标签 + 小三角箭头）；plain：mermaid 原样
   "securityLevel": "strict",   // strict 转义标签里的 HTML；文档可信时才改 loose（可用 <br/>）
   "controls": true,            // 图上的工具栏
   "exportImage": true,         // 工具栏里的「SVG」按钮

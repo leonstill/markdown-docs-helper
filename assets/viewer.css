@@ -445,17 +445,36 @@ html.mm-full-on,html.mm-full-on body{overflow:hidden}
 html[data-theme="dark"] .mg-error{border-color:#9e6a03; background:#2a2008; color:#e3b341}
 .mg-error-msg{font-family:var(--font-mono); font-size:12.5px; word-break:break-word}
 .mg-error-hint{opacity:.85}
-/* 图表块的全屏：铺满窗口，长图在里面的滚动条里看 */
+/* 图表块的全屏：铺满窗口，图按容器等比放大到「放得下的最大」尺寸。
+   做法：让 .mg-body / .mg-host 都吃满可用空间，再把 svg 撑成容器的 100%×100%。
+   mermaid 的 svg 自带 viewBox，默认 preserveAspectRatio="xMidYMid meet"，
+   于是它自己等比缩放到装得下为止（宽图顶满宽度、高图顶满高度，另一轴留白并居中），
+   不裁切也不变形，窗口缩放时纯 CSS 就跟着重算，不需要 JS 再量一次。
+   两个坑：
+     ① svg 没有 intrinsic 宽高，只写 max-width:none 会退回替换元素默认的 300×150，
+        反而比文档视图里还小（这正是「全屏后图很小」的原因）；
+     ② mermaid 把 max-width 写在 svg 的 style 内联属性上，不用 !important 压不住。 */
 .mg-block.mg-full{
   position:fixed; inset:0; z-index:60; margin:0; border:0; border-radius:0;
   display:flex; flex-direction:column; background:var(--bg); box-shadow:none;
 }
-.mg-block.mg-full .mg-bar{border-radius:0}
+.mg-block.mg-full .mg-bar{border-radius:0; flex:0 0 auto}
 .mg-block.mg-full .mg-body{
-  flex:1 1 auto; min-height:0; overflow:auto; display:flex; align-items:center; justify-content:center;
-  padding:16px;
+  flex:1 1 auto; min-height:0; overflow:auto; padding:16px;
+  display:flex; align-items:center; justify-content:center;
 }
-.mg-block.mg-full .mg-host>svg{max-width:none}
+.mg-block.mg-full .mg-host{
+  flex:1 1 auto; min-width:0; min-height:0; align-self:stretch;
+  display:flex; align-items:center; justify-content:center;
+}
+.mg-block.mg-full .mg-host>svg{
+  width:100% !important; height:100% !important;
+  max-width:none !important; max-height:none !important;
+}
+/* 全屏里摊开源码时改成上下排：图在上面尽量大，源码在下面自己滚，别并排挤成两半 */
+.mg-block.mg-full.mg-show-src .mg-body{flex-direction:column; align-items:stretch}
+.mg-block.mg-full.mg-show-src .mg-host{flex:1 1 60%}
+.mg-block.mg-full.mg-show-src .mg-body>pre.code{flex:1 1 40%; min-height:0; overflow:auto}
 html.mg-full-on,html.mg-full-on body{overflow:hidden}
 
 /* ============ 窄屏遮罩 ============ */
@@ -548,6 +567,12 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
   .mg-block.mg-full .mg-body{overflow:visible; padding:0}
   .mg-body{overflow:visible !important; padding:0}
   .mg-host>svg{max-width:100% !important; height:auto !important}
+  /* 全屏那套「撑满容器」的尺寸不能进打印：100% 高在静态文档流里会塌成 0，
+     打印时一律退回「按正文宽度等比缩放」 */
+  .mg-block.mg-full .mg-host>svg{
+    width:100% !important; height:auto !important;
+    max-width:100% !important; max-height:none !important;
+  }
   .mg-block .mg-body>pre.code{display:none !important}
   .mg-error{border-color:#bbb; background:none; color:#000}
   .intro{border:1px solid #bbb; background:none}
