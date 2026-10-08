@@ -360,5 +360,12 @@ class CDP {
     server.kill();
     await sleep(400);
     try { fs.rmSync(profile, { recursive: true, force: true }); } catch (e) {}
+    /* 测试期间 spawn 的 --serve 会用「临时配置」重建 md-viewer.html / docs-index.json /
+       index.html；只还原 config.json 不够，还要再构建一次，否则跑完测试仓库里就躺着
+       一批按临时配置生成的过期产物（node build-docs.mjs --check 会报错）。 */
+    await new Promise((res) => {
+      const b = spawn(process.execPath, [path.join(ROOT, 'build-docs.mjs')], { cwd: ROOT, stdio: 'ignore' });
+      b.on('exit', res); b.on('error', res);
+    });
   }
 })();

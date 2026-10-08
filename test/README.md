@@ -45,6 +45,11 @@ $env:CHROME = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 > 注意：在受限沙箱里启动 Chrome 可能被拒绝（浏览器内部需要命名管道 IPC）。
 > 这类环境请手工打开页面检查，或给脚本放宽权限后运行。
 
+> 这五个脚本收尾时都会还原 `config.json` **并重新构建一次产物**。原因：`--serve` 启动时会把
+> `md-viewer.html` / `docs-index.json` / `index.html` 按当时的配置重建一遍，而测试中途又临时改过配置，
+> 所以只还原 `config.json` 是不够的（跑完会留下一批按临时配置生成的过期产物，
+> `node build-docs.mjs --check` 就会报「已过期」）。现在跑完是干净的。
+
 ## 加新用例时
 
 - 渲染器的坑（表格边界、缩进代码块、嵌套列表、转义）请加成 `test/fixtures/*.md`，
