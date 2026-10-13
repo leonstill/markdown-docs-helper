@@ -13,7 +13,7 @@
  *   环境变量 CHROME 可指定浏览器路径（默认 Windows 上的 Chrome）
  * 注意：需要能启动浏览器；沙箱环境下可能被拒绝（命名管道 IPC 被拦）。
  * ===================================================================== */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -149,6 +149,9 @@ class CDP {
   const profile = path.join(os.tmpdir(), 'mdh-ui-' + Date.now());
   const serverPort = await freePort();
   const httpViewer = `http://127.0.0.1:${serverPort}/`;
+  /* 产物只由构建命令生成（--serve 全程不写盘）：先显式构建一次，
+     下面 file:// 要打开 md-viewer.html，期望值还要读 docs-index.json */
+  spawnSync(process.execPath, [path.join(ROOT, 'build-docs.mjs')], { cwd: ROOT, stdio: 'ignore' });
   const server = spawn(process.execPath, [path.join(ROOT, 'build-docs.mjs'), '--serve', '--port', String(serverPort)],
     { cwd: ROOT, stdio: 'ignore' });
   const chrome = spawn(CHROME, [
@@ -360,12 +363,5 @@ class CDP {
     server.kill();
     await sleep(400);
     try { fs.rmSync(profile, { recursive: true, force: true }); } catch (e) {}
-    /* 测试期间 spawn 的 --serve 会用「临时配置」重建 md-viewer.html / docs-index.json /
-       index.html；只还原 config.json 不够，还要再构建一次，否则跑完测试仓库里就躺着
-       一批按临时配置生成的过期产物（node build-docs.mjs --check 会报错）。 */
-    await new Promise((res) => {
-      const b = spawn(process.execPath, [path.join(ROOT, 'build-docs.mjs')], { cwd: ROOT, stdio: 'ignore' });
-      b.on('exit', res); b.on('error', res);
-    });
   }
 })();

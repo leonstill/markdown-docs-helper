@@ -9,13 +9,13 @@
  *   · 裸 §4.3 仍然指本文档
  *
  * 做法：自己搭一个临时文档目录（不动仓库里的 docs/）起 --serve，跑完收尾：
- *       关浏览器、关服务、删临时目录，并用默认 docs/ 重建产物
- *       （--serve 会顺带刷新 md-viewer.html / docs-index.json，跑完必须还原）。
+ *       关浏览器、关服务、删临时目录。--serve 不写任何产物，
+ *       md-viewer.html / docs-index.json 不会被临时目录顶掉，不用还原。
  *
  * 用法：node test/xref-ui.mjs      （失败退出码 1）
  *      环境变量 CHROME 可指定浏览器路径；沙箱里可能起不了浏览器（命名管道 IPC 被拦）。
  * ===================================================================== */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -279,9 +279,7 @@ const linkProbe = (text) => `(function(){
     await sleep(300);
     try { fs.rmSync(tmpDocs, { recursive: true, force: true }); } catch (e) {}
     try { fs.rmSync(profile, { recursive: true, force: true }); } catch (e) {}
-    /* --serve 会按临时目录刷新产物，这里用默认 docs/ 还原 */
-    const r = spawnSync(process.execPath, [path.join(ROOT, 'build-docs.mjs')], { cwd: ROOT, stdio: 'ignore' });
-    console.log(r.status === 0 ? '\n（已用默认 docs/ 重建产物）' : '\n⚠ 还原产物失败，请手工跑一次 node build-docs.mjs');
+    /* --serve 不写任何产物，临时文档目录不会污染 md-viewer.html / docs-index.json，无需还原 */
   }
 
   const bad = results.filter((r) => !r.ok).length;

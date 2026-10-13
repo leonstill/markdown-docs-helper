@@ -19,7 +19,7 @@
  * 自己拉起 --serve 实例并自动收尾；临时改 config.json 后一定会还原。
  * 用法：node test/mindmap-ui.mjs [--realtime]   （需要能启动 Chrome，可用 CHROME 覆盖路径）
  * ===================================================================== */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -149,6 +149,8 @@ const PROBE = `(function(){
 (async () => {
   const profile = path.join(os.tmpdir(), 'mdh-mm-' + Date.now());
   const serverPort = await freePort();
+  /* 产物只由构建命令生成（--serve 全程不写盘）：先把要打开的页面构建出来 */
+  spawnSync(process.execPath, [path.join(ROOT, 'build-docs.mjs')], { cwd: ROOT, stdio: 'ignore' });
   const server = spawn(process.execPath, [path.join(ROOT, 'build-docs.mjs'), '--serve', '--port', String(serverPort)],
     { cwd: ROOT, stdio: 'ignore' });
   const chrome = spawn(CHROME, [
@@ -512,12 +514,5 @@ const PROBE = `(function(){
     chrome.kill();
     server.kill();
     await sleep(300);
-    /* 测试期间 spawn 的 --serve 会用「临时配置」重建 md-viewer.html / docs-index.json /
-       index.html；只还原 config.json 不够，还要再构建一次，否则跑完测试仓库里就躺着
-       一批按临时配置生成的过期产物（node build-docs.mjs --check 会报错）。 */
-    await new Promise((res) => {
-      const b = spawn(process.execPath, [path.join(ROOT, 'build-docs.mjs')], { cwd: ROOT, stdio: 'ignore' });
-      b.on('exit', res); b.on('error', res);
-    });
   }
 })();

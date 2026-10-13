@@ -42,8 +42,8 @@ Invoke-WebRequest "https://registry.npmjs.org/mermaid/-/mermaid-$v.tgz" -OutFile
 tar -xzf mermaid.tgz
 Copy-Item package/dist/mermaid.min.js vendor/mermaid/mermaid.min.js -Force
 Copy-Item package/LICENSE            vendor/mermaid/LICENSE            -Force
-node build-docs.mjs            # 重新填进 md-viewer.html（内联）
-node build-docs.mjs --serve    # 顺带刷新实时版 index.html（外链），验证完 Ctrl+C
+node build-docs.mjs            # 重新填进 md-viewer.html（内联）与 index.html（外链）
+node build-docs.mjs --serve    # 起服务验证（--serve 不写文件），验证完 Ctrl+C
 ```
 
 没网时可从本机 npm 缓存里直接取（`_npx` / `_cacache` 下解出来的 node_modules 里就有

@@ -9,7 +9,7 @@
  *   · 引用的本地文件都真实存在（少一个文件页面就白板）
  *
  * 用法：node test/check-realtime.mjs      （失败退出码 1）
- * 前置：先跑一次 node build-docs.mjs --serve（或让它起过一次服务）
+ * 前置：先跑一次 node build-docs.mjs（三个产物都只由这条构建命令生成）
  * ===================================================================== */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,7 +26,7 @@ const check = (ok, label, detail) => {
 };
 
 if (!fs.existsSync(INDEX_HTML)) {
-  console.log('x 还没生成 index.html —— 跑一次 node build-docs.mjs --serve 再来');
+  console.log('x 还没生成 index.html —— 跑一次 node build-docs.mjs 再来');
   process.exit(1);
 }
 const html = fs.readFileSync(INDEX_HTML, 'utf8');

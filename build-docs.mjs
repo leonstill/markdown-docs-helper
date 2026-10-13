@@ -4,26 +4,28 @@
  * 由 page.template.html 生成两个页面（离线单文件版 + 实时服务版），或启动本地实时服务。
  *
  * 重要：本脚本【只读】文档目录，绝不修改、移动、删除任何 .md／.mermaid 文档。
- *       写入被限制在本工程内，且不允许写进文档目录（见 assertInsideRoot）：
+ *       只有明确的构建命令（不带 --serve / --check）才写文件，写入被限制在本工程内，
+ *       且不允许写进文档目录（见 assertInsideRoot）：
  *         · md-viewer.html   —— 离线单文件版：把配置、文档快照、引擎源码都填进模板的占位块
- *         · index.html       —— 实时服务版：同一模板、同一份数据，引擎改成本地外链、
- *                               快照置空；只在 --serve 时刷新
- *         · docs-index.json  —— 实时模式的索引
+ *         · index.html       —— 实时服务版：同一模板、同一份数据，引擎改成本地外链、快照置空
+ *         · docs-index.json  —— 最后一次构建的文档索引（实时服务用的是每次现扫的索引，不读这个文件）
  *         · config.json      —— 仅在缺失时生成默认配置
+ *       --serve 与 --check 不写任何文件：--serve 把实时版页面放在内存里响应，
+ *       --check 只做比对。所以 --serve 指定哪个目录，都不会顶掉上面这些产物。
  *
  * 两种页面（都不联网，只用工程内的本地资源）：
  *   md-viewer.html  离线单文件：引擎整段内联，file:// 双击即可看（构建时刷新）
- *   index.html      实时服务版：引擎走本地外链，浏览器可缓存（--serve 时自动生成，
+ *   index.html      实时服务版：引擎走本地外链，浏览器可缓存（构建时一并生成，
  *                   是 --serve 的默认入口；不要手工编辑，改 page.template.html 即可）
  *   两个产物都由 page.template.html 生成，页面结构只维护这一份模板。
  *   页面里只引用工程内的本地资源（assets/*、vendor/markmap/*），不碰任何互联网资源。
  *
  * 用法：
- *   node build-docs.mjs                       # 扫描 ./docs，刷新页面内置数据
+ *   node build-docs.mjs                       # 扫描 ./docs，刷新三个产物（页面内置数据 + index.html）
  *   node build-docs.mjs <目录>                 # 扫描任意目录（页面内路径前缀仍为 docs/）
  *   node build-docs.mjs --check [目录]         # 只检查是否过期（过期退出码 1），不写文件
  *   node build-docs.mjs --serve [目录]         # 启动本地实时服务（默认 8899，绑不上就往后顺延）
- *                                             #   并生成 index.html，访问 / 即进实时版
+ *                                             #   访问 / 即进实时版；不写任何文件
  *   node build-docs.mjs --serve --port 9000 [目录]
  *   node build-docs.mjs --serve --lan [目录]   # 绑定所有网卡（0.0.0.0），同一局域网内可访问
  *   node build-docs.mjs --serve --host 192.168.1.20 [目录]   # 只绑定指定的本机地址
@@ -45,6 +47,7 @@
  *      文档变动后重跑本脚本刷新。
  *   2) node build-docs.mjs --serve —— 打开 http://127.0.0.1:<端口>/ （即 index.html），
  *      实时读取文档目录下的 .md，新增/修改文档刷新页面即生效，无需重新构建；
+ *      这一版页面在内存里现生成，--serve 全程不落盘；
  *      想给同一局域网里的同事看，加 --lan（等价于 --host 0.0.0.0）。
  * ===================================================================== */
 import fs from 'node:fs';
@@ -76,7 +79,7 @@ const VIRTUAL_ROOT = 'docs';
 const DEFAULT_DOCS_DIR = path.join(ROOT, 'docs');
 let DOCS_DIR = DEFAULT_DOCS_DIR;
 const VIEWER = path.join(ROOT, 'md-viewer.html');       // 离线单文件版（生成物，随仓库提交）
-const INDEX_HTML = path.join(ROOT, 'index.html');       // 实时服务版（生成物，仅 --serve 时刷新）
+const INDEX_HTML = path.join(ROOT, 'index.html');       // 实时服务版（生成物，构建时刷新；--serve 只用内存里的同一份）
 const TEMPLATE = path.join(ROOT, 'page.template.html'); // 两个页面唯一的布局来源
 const INDEX = path.join(ROOT, 'docs-index.json');
 const CONFIG = path.join(ROOT, 'config.json');
@@ -528,22 +531,32 @@ function onlineRefs(html) {
   return [...html.matchAll(/(?:src|href)\s*=\s*["'](?:https?:)?\/\//gi)].map((m) => m[0]);
 }
 
-/* ---------- 构建 ---------- */
-async function build({ quiet = false, check = false, realtimePage = false } = {}) {
-  const cfg = await readConfig({ createIfMissing: !check });
+/* ---------- 构建 ----------
+   mode 决定写盘范围，只有 'build' 会写文件：
+     'build'（默认）—— 明确的构建命令：md-viewer.html、docs-index.json、index.html 一起刷新
+     'check'        —— 只跟磁盘上的产物比对，一个字节都不写
+     'serve'        —— 不写盘：把实时版页面文本返回给 serve()，由它在内存里响应 /index.html */
+async function build(mode = 'build') {
+  const check = mode === 'check';
+  const quiet = mode === 'serve';
+  const cfg = await readConfig({ createIfMissing: mode === 'build' });
   const { docs, skipped, files } = await collect({
     withText: true,
     kinds: { md: true, mindmap: mindmapExts(cfg.value) },
   });
   const snap = snapshotPayload(docs, skipped);
   const idx = indexPayload(docs, skipped);
-  const snapText = renderSnapshot(snap);
   const cfgText = renderConfig(cfg.value);
   const needMermaid = mermaidEnabled(cfg.value) && needsMermaidEngine(docs);
   const bundles = await readBundles(cfg.value, { needMermaid });
   const template = await fsp.readFile(TEMPLATE, 'utf8');
-  const next = renderPage(template, { cfgText, snapText, bundles, mode: 'offline' });
+  const wantOffline = mode !== 'serve';   // 离线单文件（引擎内联）要不要拼：--serve 用不上
+  /* 文档快照文本只有离线单文件用得上（实时版页面里那块恒为 {}）；--serve 就省掉这份拼接 */
+  const snapText = wantOffline ? renderSnapshot(snap) : '';
   const realtime = renderPage(template, { cfgText, snapText, bundles, mode: 'realtime' });
+  const next = wantOffline
+    ? renderPage(template, { cfgText, snapText, bundles, mode: 'offline' })
+    : null;
 
   if (check) {
     const viewerText = await fsp.readFile(VIEWER, 'utf8');
@@ -559,7 +572,7 @@ async function build({ quiet = false, check = false, realtimePage = false } = {}
     const bundleStale = embedded.some((text, i) => text !== bundles[i].text.trim());    /* 真正的检验：产物应与「模板 + 当前数据」完全一致（generatedAt 除外）。
        模板被手改、引擎没跟上、占位块填错，都会在这里露出来，不需要另写一套结构校验规则。 */
     const viewerStale = pageSignature(viewerText) !== pageSignature(next);
-    /* index.html 是 --serve 的生成物：存在才校验 */
+    /* 新克隆的仓库还没构建过：index.html 存在才校验 */
     const realtimeStale = fs.existsSync(INDEX_HTML) &&
       pageSignature(await fsp.readFile(INDEX_HTML, 'utf8')) !== pageSignature(realtime);
     if (snapStale || cfgStale || idxStale || bundleStale || viewerStale || realtimeStale) {
@@ -576,26 +589,30 @@ async function build({ quiet = false, check = false, realtimePage = false } = {}
       return 1;
     }
     console.log(`✓ 都是最新的（${docs.length} 篇文档，来自 ${path.relative(ROOT, DOCS_DIR) || '.'}，配置来自 config.json` +
-      `${fs.existsSync(INDEX_HTML) ? '，index.html 实时版页面已同步' : '，index.html 尚未生成（跑 --serve 时生成）'}）`);
+      `${fs.existsSync(INDEX_HTML) ? '，index.html 实时版页面已同步' : '，index.html 尚未生成（跑 node build-docs.mjs 生成）'}）`);
     return 0;
   }
 
   // 离线承诺的硬校验：产物里不许出现指向互联网的资源引用
-  const online = onlineRefs(next);
-  if (online.length) throw new Error(`md-viewer.html 里出现了互联网资源引用：${online.join(' ')}`);
+  const onlineRt = onlineRefs(realtime);
+  if (onlineRt.length) throw new Error(`index.html 里出现了互联网资源引用：${onlineRt.join(' ')}`);
+  if (next !== null) {
+    const online = onlineRefs(next);
+    if (online.length) throw new Error(`md-viewer.html 里出现了互联网资源引用：${online.join(' ')}`);
+  }
+
+  /* --serve 到这里就结束：实时版页面交给服务在内存里响应。
+     md-viewer.html / docs-index.json 一概不写，所以 --serve 指定哪个目录，
+     都不会顶掉最后一次构建命令留下的产物。 */
+  if (mode === 'serve') return realtime;
 
   assertInsideRoot(VIEWER);
   assertInsideRoot(INDEX);
+  assertInsideRoot(INDEX_HTML);
   await fsp.writeFile(VIEWER, next, 'utf8');
   await fsp.writeFile(INDEX, renderIndex(idx), 'utf8');
-
   // 实时版页面与离线版同源同数据，只是引擎走本地外链、快照置空
-  if (realtimePage) {
-    const onlineRt = onlineRefs(realtime);
-    if (onlineRt.length) throw new Error(`index.html 里出现了互联网资源引用：${onlineRt.join(' ')}`);
-    assertInsideRoot(INDEX_HTML);
-    await fsp.writeFile(INDEX_HTML, realtime, 'utf8');
-  }
+  await fsp.writeFile(INDEX_HTML, realtime, 'utf8');
 
   if (!quiet) {
     const sb = cfg.value.sidebar || {};
@@ -727,7 +744,8 @@ function bindError(err, host, port) {
   return e;
 }
 
-async function serve(port, kinds, host = DEFAULT_HOST) {
+/* realtimeHtml：build('serve') 现算的实时版页面。--serve 全程不落盘，页面就在内存里给出去。 */
+async function serve(port, kinds, host = DEFAULT_HOST, realtimeHtml) {
   const server = http.createServer(async (req, res) => {
     const send = (code, type, body) => {
       res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
@@ -749,12 +767,7 @@ async function serve(port, kinds, host = DEFAULT_HOST) {
         res.writeHead(302, { Location: '/index.html' });
         return res.end();
       }
-      if (pathname === '/index.html') {
-        if (!fs.existsSync(INDEX_HTML)) {
-          return send(500, MIME['.txt'], 'index.html 尚未生成，请重新运行：node build-docs.mjs --serve');
-        }
-        return sendFile(INDEX_HTML);
-      }
+      if (pathname === '/index.html') return send(200, MIME['.html'], realtimeHtml);
       // md-viewer.html 等其它工程内文件走下面的通用静态分支
       // 实时索引：每次请求都重新扫描文档目录，因此新增文档无需重建
       if (pathname === '/docs-index.json') {
@@ -841,7 +854,11 @@ async function serve(port, kinds, host = DEFAULT_HOST) {
     const tail = e.url === entries[0].url ? '  ← 实时版 index.html（引擎走本地外链）' : '';
     console.log(`  ${e.label}：${e.url.padEnd(width)}${tail}`);
   });
-  console.log(`  离线版对照：${entries[0].url}${path.basename(VIEWER)}`);
+  if (fs.existsSync(VIEWER)) {
+    console.log(`  离线版对照：${entries[0].url}${path.basename(VIEWER)}`);
+  } else {
+    console.log('  离线版未生成（--serve 不写产物）：node build-docs.mjs');
+  }
   if (wildcard) {
     console.log('  提示：服务没有鉴权，文档内容对同一网络可见，只在可信内网里这么用。');
   } else if (isLoopbackHost(host)) {
@@ -953,12 +970,16 @@ if (docsDir !== null) {
 
 try {
   if (mode === 'check') {
-    process.exit(await build({ check: true }));
+    process.exit(await build('check'));
   } else if (mode === 'serve') {
-    // 刷新 md-viewer.html（离线版，引擎内联），再由它派生出 index.html（实时版，引擎本地外链）
-    await build({ quiet: true, realtimePage: true });
+    // 实时版页面现算现给，不落盘；md-viewer.html / docs-index.json 只由构建命令刷新
+    const realtimeHtml = await build('serve');
     const cfg = await readConfig();
-    await serve(port, { md: true, mindmap: mindmapExts(cfg.value) }, host);
+    if (cfg.source !== 'file') {
+      console.log('· 未找到 config.json，本次按默认配置服务（--serve 不写文件）：');
+      console.log('  想要一份可编辑的配置：node build-docs.mjs');
+    }
+    await serve(port, { md: true, mindmap: mindmapExts(cfg.value) }, host, realtimeHtml);
   } else {
     process.exit(await build());
   }

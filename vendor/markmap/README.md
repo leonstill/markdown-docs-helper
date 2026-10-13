@@ -37,8 +37,8 @@ Invoke-WebRequest "https://registry.npmjs.org/d3/-/d3-7.9.0.tgz" -OutFile d3.tgz
 tar -xzf lib.tgz;  Copy-Item package/dist/browser/index.iife.js vendor/markmap/markmap-lib.iife.js  -Force
 tar -xzf view.tgz; Copy-Item package/dist/browser/index.js      vendor/markmap/markmap-view.browser.js -Force
 tar -xzf d3.tgz;   Copy-Item package/dist/d3.min.js            vendor/markmap/d3.min.js -Force
-node build-docs.mjs      # 重新填进 md-viewer.html（内联）
-node build-docs.mjs --serve   # 顺带刷新实时版 index.html（外链），验证完 Ctrl+C
+node build-docs.mjs      # 重新填进 md-viewer.html（内联）与 index.html（外链）
+node build-docs.mjs --serve   # 起服务验证（--serve 不写文件），验证完 Ctrl+C
 ```
 
 升级后请跑 `npm test`（含 `test/check-realtime.mjs`：外链文件是否存在、页面是否零外部资源），

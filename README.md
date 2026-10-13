@@ -52,11 +52,11 @@ node build-docs.mjs --serve "D:\some\project\docs"
 # 命令
 
 ```
-node build-docs.mjs                        # 扫描 ./docs，刷新 md-viewer.html 内置数据（改完 config 或文档后跑这个）
+node build-docs.mjs                        # 扫描 ./docs，写出全部产物：md-viewer.html、docs-index.json、index.html（改完 config 或文档后跑这个）
 node build-docs.mjs <目录>                  # 换一个文档目录（可配合 --check / --serve 使用）
-node build-docs.mjs --check [目录]          # 只检查产物是否已过期（过期时退出码为 1）
+node build-docs.mjs --check [目录]          # 只检查产物是否已过期（过期时退出码为 1），不写文件
 node build-docs.mjs --serve [目录]          # 启动本地实时服务（默认 8899，端口被占用或绑不上会自动往后找端口），
-                                           # 并生成实时版 index.html；访问 / 即进实时版
+                                           # 访问 / 即进实时版；不写任何文件，页面在内存里现生成
 node build-docs.mjs --serve --port 9000 [目录]
 node build-docs.mjs --serve --lan [目录]    # 绑定所有网卡（0.0.0.0），同一局域网内可访问
 node build-docs.mjs --serve --host 192.168.1.20 [目录]   # 只绑定指定的本机地址
@@ -97,7 +97,7 @@ node build-docs.mjs --help                 # 用法说明
 markdown-docs-helper/
 ├─ page.template.html   # 两个页面唯一的布局来源（改页面结构改这里；数据/引擎位置留空占位）
 ├─ md-viewer.html       # 离线单文件产物：内置文档数据 + 内联的导图/图表引擎，双击即可看
-├─ index.html           # 实时版产物：引擎改成本地外链、快照置空，--serve 时自动生成（已在 .gitignore）
+├─ index.html           # 实时版产物：引擎改成本地外链、快照置空，随构建命令一并生成（已在 .gitignore）
 ├─ assets/             # 页面的样式与应用逻辑（改动页面看这里，不用碰 html）
 │  ├─ viewer.css       #   全部样式
 │  ├─ mindmap-core.js  #   Mermaid mindmap 解析（纯函数，可单测）
@@ -222,7 +222,10 @@ stateDiagram-v2
 # 实时模式与离线快照
 
 `--serve` 实时模式读文档目录原文（刷新即生效），双击 `md-viewer.html` 读页面内置快照（改完要重跑
-`node build-docs.mjs`）。两种页面的差别、页面上的「数据来源」提示，以及产物过期检查
+`node build-docs.mjs`）。写盘边界很清楚：**只有 `node build-docs.mjs` 这条构建命令会写产物**，
+`--serve` 与 `--check` 一个文件都不写（`--serve` 的实时版页面在内存里现生成），
+所以 `--serve <别的目录>` 不会顶掉仓库里按默认 `docs/` 生成的 `md-viewer.html` / `docs-index.json`。
+两种页面的差别、页面上的「数据来源」提示，以及产物过期检查
 （`node build-docs.mjs --check`、`node test/why-stale.mjs`）见
 [`docs/指南/界面与快捷键.md`](docs/指南/界面与快捷键.md)。
 

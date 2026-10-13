@@ -11,6 +11,10 @@
  *   · /docs/%2e%2e/...      → 403（目录穿越被拦）
  *   · /favicon.ico          → 204；未知路径 → 404
  *   · 跑完以后文档目录的文件清单与 mtime 完全没变（只读）
+ *   · 工程产物 md-viewer.html / docs-index.json / index.html / config.json 一个都没被写过
+ *     —— --serve 全程不落盘，实时版页面在内存里给出
+ *
+ * 前置：先跑一次 node build-docs.mjs（三个产物只由这条明确的构建命令生成）。
  *
  * 用法：
  *   node test/serve-smoke.mjs                       # 只测工程自带的 docs/
@@ -56,6 +60,15 @@ function snapshotDir(dir) {
   return out.join('\n');
 }
 
+/** 工程产物指纹：--serve 一个都不该碰（实时版页面在内存里给，产物只由构建命令写） */
+const ARTIFACTS = ['md-viewer.html', 'docs-index.json', 'index.html', 'config.json'];
+function fingerprintArtifacts() {
+  return ARTIFACTS.map((name) => {
+    const st = fs.statSync(path.join(ROOT, name), { throwIfNoEntry: false });
+    return `${name}|${st ? `${st.size}|${st.mtime.toISOString()}` : '缺失'}`;
+  }).join('\n');
+}
+
 async function start(port, docsDir) {
   const args = [path.join(ROOT, 'build-docs.mjs'), '--serve', '--port', String(port)];
   if (docsDir) args.push(docsDir);
@@ -73,6 +86,7 @@ async function run(label, docsDir) {
   console.log(`\n--- ${label} ---`);
   const realDocs = docsDir || path.join(ROOT, 'docs');
   const before = snapshotDir(realDocs);
+  const artifactsBefore = fingerprintArtifacts();
   const port = await freePort();
   const { proc, base } = await start(port, docsDir);
   try {
@@ -154,10 +168,20 @@ async function run(label, docsDir) {
 
     // 6. 只读：文档目录一个字都没变
     check(snapshotDir(realDocs) === before, '文档目录的文件清单与 mtime 未变（只读保证）');
+
+    // 7. --serve 不写盘：产物一个都没被碰过（实时版页面在内存里给出）
+    check(fingerprintArtifacts() === artifactsBefore,
+      '工程产物的清单与 mtime 未变（--serve 不写 md-viewer.html / docs-index.json / index.html）',
+      fingerprintArtifacts().split('\n').filter((line, i) => line !== artifactsBefore.split('\n')[i]).join('  '));
   } finally {
     proc.kill();
     await sleep(300);
   }
+}
+
+if (!fs.existsSync(path.join(ROOT, 'md-viewer.html'))) {
+  console.log('x 还没生成 md-viewer.html —— 先跑一次 node build-docs.mjs（--serve 不写产物）');
+  process.exit(1);
 }
 
 try {
