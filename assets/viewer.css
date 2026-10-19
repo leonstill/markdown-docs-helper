@@ -10,6 +10,9 @@
   --radius:8px;
   --content-w:920px;
   --left-w:286px; --right-w:246px;
+  --searchbar-h:46px;
+  --overlay-h:52px;          /* 顶部遮挡高度：顶栏；搜索条展开时再加一条 */
+  --mark-bg:#fff3bf; --mark-cur:#ffd465;
   --dur:.3s; --ease:cubic-bezier(.4,0,.2,1); --ease-out:cubic-bezier(.16,.84,.44,1);
   --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Source Han Sans SC",sans-serif;
   --font-mono:"Cascadia Mono",Consolas,"JetBrains Mono","Sarasa Mono SC","Microsoft YaHei",ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -22,6 +25,7 @@ html[data-theme="dark"]{
   --shadow:0 1px 3px rgba(0,0,0,.4);
   --shadow-md:0 10px 26px -8px rgba(0,0,0,.65);
   --accent-glow:rgba(88,166,255,.2);
+  --mark-bg:#5a4a12; --mark-cur:#8a6a12;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -83,9 +87,45 @@ kbd{font-family:var(--font-mono); font-size:.8em; border:1px solid var(--border)
 .btn.icon:hover:not([disabled]) svg{transform:scale(1.1)}
 #toggleLeft:active:not([disabled]){transform:translateX(-1px) scale(.96)}
 #toggleRight:active:not([disabled]){transform:translateX(1px) scale(.96)}
-/* 侧栏开关：按下态表示该侧栏正在显示 */
-.btn[aria-pressed="true"]{border-color:var(--accent); color:var(--accent); background:var(--accent-soft)}
-.btn[aria-pressed="true"]:hover{box-shadow:0 2px 10px -2px var(--accent-glow)}
+/* 侧栏开关：按下态表示该侧栏正在显示；搜索按钮展开态同理 */
+.btn[aria-pressed="true"],.btn[aria-expanded="true"]{border-color:var(--accent); color:var(--accent); background:var(--accent-soft)}
+.btn[aria-pressed="true"]:hover,.btn[aria-expanded="true"]:hover{box-shadow:0 2px 10px -2px var(--accent-glow)}
+/* 只有一枚图标常驻的另一半：主题按钮按当前配色显示要切去的那一面 */
+#themeBtn .i-sun{display:none}
+html[data-theme="dark"] #themeBtn .i-sun{display:block}
+html[data-theme="dark"] #themeBtn .i-moon{display:none}
+/* 复制链接：成功后换对勾，1.4s 后换回链环 */
+#linkBtn .i-check{display:none}
+#linkBtn.copied .i-check{display:block}
+#linkBtn.copied .i-link{display:none}
+#linkBtn.copied{border-color:var(--accent); color:var(--accent); background:var(--accent-soft)}
+
+/* ============ 顶栏搜索条（从标题栏下滑；收起时藏到顶栏背后） ============ */
+.searchbar{
+  position:fixed; top:52px; left:0; right:0; z-index:39;   /* 比顶栏低一层，滑出/收起都像从顶栏下面抽出来 */
+  height:var(--searchbar-h); display:flex; align-items:center; gap:8px; padding:0 10px 0 12px;
+  background:var(--bg-elev); border-bottom:1px solid var(--border); box-shadow:var(--shadow);
+  transform:translateY(-100%); opacity:0; pointer-events:none;
+  transition:transform var(--dur) var(--ease), opacity .22s var(--ease),
+             background-color .24s linear, border-color .24s linear;
+}
+body.search-open .searchbar{transform:none; opacity:1; pointer-events:auto}
+/* 展开时顶部一共遮住这么多：所有「让开顶栏」的算法都读这一个变量 */
+body.search-open{--overlay-h:calc(52px + var(--searchbar-h))}
+.searchbar .sb-mg{flex:0 0 auto; color:var(--fg-muted)}
+.searchbar .sb-input{
+  flex:1 1 auto; min-width:0; height:32px; padding:0 10px; font-family:inherit; font-size:13.5px;
+  color:var(--fg); background:var(--bg); border:1px solid var(--border); border-radius:6px;
+  transition:border-color .16s var(--ease), box-shadow .2s var(--ease), background-color .24s linear;
+}
+.searchbar .sb-input:hover{border-color:var(--fg-muted)}
+.searchbar .sb-input:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+/* 搜索条展开时三栏一起往下让位（正文靠 padding 推，侧栏靠 sticky 的 top），否则第一行会被盖住 */
+body.search-open main{padding-top:var(--searchbar-h)}
+body.search-open .sidebar,body.search-open .toc{
+  top:var(--overlay-h); height:calc(100vh - var(--overlay-h));
+}
+body.search-open .mm{height:calc(100vh - 104px - var(--searchbar-h))}
 
 /* ============ 三栏布局（左右栏可独立隐藏，带缓动收起/展开） ============ */
 .layout{display:flex; align-items:flex-start}
@@ -119,7 +159,8 @@ body.right-hidden .toc{
              background-color .24s linear, border-color .24s linear,
              visibility 0s linear var(--dur);
 }
-main{flex:1 1 auto; min-width:0; display:flex; justify-content:center}
+main{flex:1 1 auto; min-width:0; display:flex; justify-content:center;
+  transition:padding-top var(--dur) var(--ease)}
 
 /* 侧栏标题行 + 右上角关闭按钮 */
 .pane-h{
@@ -343,6 +384,40 @@ html[data-theme="dark"] .notice{border-color:#9e6a03; background:#2a2008; color:
 .card .cs{font-size:13px; color:var(--fg-muted); line-height:1.6}
 .card .cc{font-size:11.5px; color:var(--fg-muted); margin-top:7px}
 
+/* ============ 搜索结果页 ============ */
+/* 左栏导航点过来时，滚动落点要躲开顶栏（+ 展开的搜索条），靠 scroll-margin 而不是算像素 */
+.sr-group{margin:16px 0 22px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg-elev);
+  overflow:hidden; scroll-margin-top:calc(var(--overlay-h) + 12px)}
+@keyframes mdv-group{0%{box-shadow:0 0 0 3px var(--accent-glow)}100%{box-shadow:0 0 0 3px transparent}}
+.sr-group.flash{animation:mdv-group 1.2s var(--ease-out)}
+.sr-head{
+  display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;
+  padding:9px 14px; border-bottom:1px solid var(--border-soft); background:var(--bg-soft);
+}
+.sr-head .sr-t{font-weight:700; font-size:14.5px}
+.sr-head a.sr-t:hover{color:var(--accent); text-decoration:none}
+.sr-head .sr-p{font-family:var(--font-mono); font-size:11.5px; color:var(--fg-muted)}
+.sr-head .sr-n{font-family:var(--font-mono); font-size:11.5px; color:var(--accent)}
+.sr-head .sr-graph{font-size:11px; color:var(--fg-muted); border:1px solid var(--border);
+  border-radius:999px; padding:1px 8px; white-space:nowrap}
+.sr-item{display:block; padding:8px 14px; border-bottom:1px solid var(--border-soft); color:var(--fg)}
+.sr-item:last-child{border-bottom:0}
+.sr-item:hover{background:var(--accent-soft); text-decoration:none}
+.sr-item:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+.sr-item .sr-sec{display:block; font-size:11.5px; color:var(--fg-muted); margin-bottom:2px}
+.sr-item .sr-sec .sr-ln{float:right; font-family:var(--font-mono); color:var(--fg-muted)}
+.sr-item .sr-ctx{display:block; font-family:var(--font-mono); font-size:12px; line-height:1.75; color:var(--fg-muted)}
+.sr-item .sr-ctx i,.sr-item .sr-ctx b{display:block; font-style:normal; font-weight:400;
+  white-space:pre; overflow:hidden; text-overflow:ellipsis}
+.sr-item .sr-ctx b{color:var(--fg)}
+.sr-item .sr-more{display:block; padding:7px 14px; font-size:12px; color:var(--fg-muted)}
+
+/* ============ 正文命中高亮（搜索跳转后留在页面上） ============ */
+.article mark,.search-page mark{background:var(--mark-bg); color:inherit; border-radius:3px; padding:0 1px}
+@keyframes mdv-hit{0%,100%{box-shadow:0 0 0 0 var(--accent-glow)}45%{box-shadow:0 0 0 5px var(--accent-glow)}}
+.article mark.sr-cur{background:var(--mark-cur); box-shadow:0 0 0 2px var(--accent); border-radius:4px;
+  animation:mdv-hit 1.1s var(--ease-out) 2}
+
 /* ============ 思维导图（.mermaid） ============ */
 /* 容器高度 = 视口 - 顶栏 - 底部信息条；导图自己滚动手势，页面本身不滚 */
 .mm{display:flex; flex-direction:column; height:calc(100vh - 104px); min-height:440px}
@@ -511,8 +586,12 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
   .article{padding:18px 18px 70px}
   .topbar .brand .bs{display:none}
   .topbar .path{display:none}
-  .lbl{display:none}
-  #printBtn,#linkBtn{display:none}
+  .topbar .btn.icon{padding:0 5px}
+  /* 窄屏下左右栏是抽屉，搜索条展开时同样要让出顶部那一条 */
+  body.search-open .sidebar,body.search-open .toc{top:var(--overlay-h); height:auto}
+  body.search-open #scrim{inset:var(--overlay-h) 0 0}
+  .searchbar{padding:0 8px 0 10px; gap:6px}
+  .searchbar .sb-mg{display:none}
 }
 
 /* ============ 动效 ============ */
@@ -542,9 +621,10 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
 @media print{
   :root{--bg:#fff; --bg-soft:#fff; --bg-elev:#fff; --fg:#000; --fg-muted:#444;
         --border:#bbb; --border-soft:#ddd; --code-bg:#f7f7f7; --quote-bg:#fafafa; --shadow:none}
-  .topbar,.sidebar,.toc,#scrim,.anchor,.meta .no-print,.intro .anchor{display:none !important}
+  .topbar,.searchbar,.sidebar,.toc,#scrim,.anchor,.meta .no-print,.intro .anchor{display:none !important}
   .layout{display:block}
   main{display:block}
+  body.search-open main{padding-top:0}
   .article{max-width:none; padding:0}
   body{font-size:11.5pt; line-height:1.65}
   .article h1{font-size:19pt} .article h2{font-size:15pt} .article h3{font-size:13pt}

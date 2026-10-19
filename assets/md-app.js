@@ -95,7 +95,7 @@
   /* ---------- 主题 ---------- */
   function applyTheme(t) {
     document.documentElement.setAttribute('data-theme', t);
-    $('themeBtn').textContent = t === 'dark' ? '浅色' : '深色';
+    // 深/浅两枚图标由 CSS 按 data-theme 切换，这里不往按钮里写文字
     try { localStorage.setItem('mdv-theme', t); } catch (e) {}
     // 思维导图的配色是画上去的，换主题要按新配色重画一遍
     if (state.mindmap && state.mm) renderMindmap({ keepView: false });
@@ -213,8 +213,8 @@
     });
     return h + '</div>';
   }
-  /* 跳到章节后闪一下，跨文档跳转时最容易怀疑「是不是没跳对」 */
-  function flashHeading(el) {
+  /* 跳过去之后闪一下（章节、结果分组都用）：最容易怀疑的是「是不是没跳对地方」 */
+  function flashEl(el) {
     if (!el || !el.classList) return;
     el.classList.remove('flash');
     void el.offsetWidth;
@@ -291,8 +291,25 @@
     $('toggleRight').setAttribute('aria-pressed', String(state.rightOpen));
   }
   function setPane(which, open) {
-    if (which === 'left') state.leftOpen = open; else state.rightOpen = open;
+    // 用户自己动手开合左栏就算接管了它，结果页的「借用」不再替他还原
+    if (which === 'left') { srLeftBorrowed = false; state.leftOpen = open; }
+    else state.rightOpen = open;
     syncLayout(); saveLayout();
+  }
+  /* 结果页的左栏导航：左栏本来关着就临时借过来用一下，离开结果页还回去。
+     只改内存里的开关、不调 saveLayout，用户的记忆布局不受影响。 */
+  var srLeftBorrowed = false;
+  function borrowLeftPane() {
+    if (state.leftOpen) return;
+    srLeftBorrowed = true;
+    state.leftOpen = true;
+    syncLayout();
+  }
+  function returnLeftPane() {
+    if (!srLeftBorrowed) return;
+    srLeftBorrowed = false;
+    state.leftOpen = false;
+    syncLayout();
   }
   function togglePane(which) {
     setPane(which, which === 'left' ? !state.leftOpen : !state.rightOpen);
@@ -466,6 +483,8 @@
   function renderSidebar() {
     var q = $('search').value;
     var tree = $('tree');
+    // 结果页会把左栏借去做文件导航（顺带改标题），回到目录视图得还回来
+    $('sidebarTitle').textContent = state.cfg.sidebar.title || '';
     var showCounts = state.cfg.sidebar.showCounts !== false;
     var hits = searchDocs(q);
 
@@ -518,6 +537,248 @@
     $('foot').innerHTML = lines.join('<br>');
   }
 
+  /* ==================================================================
+     全文搜索（顶栏搜索条 → 正文区结果页）
+     - 范围：启动时导入的全部文档原文（含 config 里 hidden 的），大小写不敏感
+     - 结果按文档分组，每条给出「所在章节 + 命中行 ±1 行上下文 + 行号」
+     - 点结果：#p=…&h=…&q=…&k=…，正文里所有命中处标 <mark>，滚到这一条那一处
+     - 匹配按行做，所以跨行的短语不算命中（输入框本身就是单行）
+     ================================================================== */
+  var SR_MAX_PER_DOC = 40;    // 单篇最多列出多少处
+  var SR_MAX_TOTAL = 400;     // 整页最多列出多少处
+  var SR_CTX_CHARS = 150;     // 上下文每行截断长度
+  var XHTML = 'http://www.w3.org/1999/xhtml';
+
+  function searchHref(path, q, occ, section) {
+    return '#p=' + enc(path) + (section ? '&h=' + enc(section) : '') +
+      '&q=' + enc(q) + '&k=' + occ;
+  }
+
+  function searchAll(qraw) {
+    var raw = String(qraw || '').trim();
+    var q = raw.toLowerCase();
+    if (!q) return null;
+    var groups = [], all = 0, shown = 0;
+    state.docs.forEach(function (doc, order) {
+      var lines = String(doc.text || '').replace(/\r\n?/g, '\n').split('\n');
+      var decls = docRefs(doc).lineSet;              // 文首声明行不进正文，搜它只会跳不到地方
+      var heads = Core.scanHeadings(lines.join('\n'), htmlMode());
+      var hits = [], hi = 0, sec = null, occ = 0;
+      for (var i = 0; i < lines.length; i++) {
+        while (hi < heads.length && heads[hi].line <= i) { sec = heads[hi]; hi++; }
+        if (decls[i]) continue;
+        var low = lines[i].toLowerCase(), at = low.indexOf(q);
+        while (at >= 0) {
+          all++;
+          if (shown < SR_MAX_TOTAL && hits.length < SR_MAX_PER_DOC) {
+            hits.push({
+              line: i, col: at, occ: occ, sec: sec, text: lines[i],
+              before: i > 0 && !decls[i - 1] ? lines[i - 1] : '',
+              after: i + 1 < lines.length && !decls[i + 1] ? lines[i + 1] : ''
+            });
+            shown++;
+          }
+          occ++;
+          at = low.indexOf(q, at + q.length);
+        }
+      }
+      if (hits.length) groups.push({
+        doc: doc, hits: hits, all: occ, order: order,
+        graphic: isMindmapDoc(doc),   // 整篇画成图的文档（.mermaid）没法在正文里定位
+        nameHit: String(doc.title || '').toLowerCase().indexOf(q) >= 0
+      });
+    });
+    groups.sort(function (a, b) { return (b.nameHit - a.nameHit) || (a.order - b.order); });
+    return { raw: raw, q: q, groups: groups, docs: groups.length, all: all, shown: shown };
+  }
+
+  /* 截断一行的显示宽度：命中位置太靠后时改成「以命中处为中心开窗」，别把命中截没了 */
+  function srCut(s, at) {
+    s = String(s == null ? '' : s).replace(/\t/g, '    ');
+    if (s.length <= SR_CTX_CHARS) return s;
+    if (typeof at === 'number' && at > SR_CTX_CHARS - 24) {
+      var from = Math.max(0, Math.min(at - 20, s.length - SR_CTX_CHARS));
+      return (from > 0 ? '…' : '') + s.slice(from, from + SR_CTX_CHARS) +
+        (from + SR_CTX_CHARS < s.length ? '…' : '');
+    }
+    return s.slice(0, SR_CTX_CHARS) + '…';
+  }
+  /* 先按原文找到命中处，再逐段转义拼接：先转义会打乱偏移 */
+  function srMark(s, q) {
+    var low = String(s).toLowerCase(), at = low.indexOf(q), pos = 0, out = '';
+    while (at >= 0) {
+      out += esc(String(s).slice(pos, at)) + '<mark>' + esc(String(s).slice(at, at + q.length)) + '</mark>';
+      pos = at + q.length; at = low.indexOf(q, pos);
+    }
+    return out + esc(String(s).slice(pos));
+  }
+
+  function renderSearchPage(qraw) {
+    var q = String(qraw || '').trim();
+    state.current = null;
+    state.mindmap = null; state.diagram = null; state.headings = [];
+    exitMindmapFullscreen();
+    exitMermaidFullscreen();
+    applyConfig();
+    $('docPath').textContent = q ? '全文搜索：' + q : '全文搜索';
+    $('tocList').innerHTML = '<li class="toc-empty">搜索结果页没有本篇目录</li>';
+    $('prevBtn').disabled = true; $('nextBtn').disabled = true;
+    document.title = (q ? q + ' · 搜索' : '搜索') + (state.cfg.subtitle ? ' ' + state.cfg.subtitle : '');
+
+    var res = q ? searchAll(q) : null;
+    var html = '<div class="search-page"><h1>搜索结果</h1>' +
+      '<div class="meta">' +
+      '<span>关键词 <code>' + esc(q || '（空）') + '</code></span>' +
+      (res ? '<span>' + res.all + ' 处命中 · ' + res.docs + ' 篇文档</span>' : '') +
+      '<span class="no-print">范围：启动时导入的 ' + state.docs.length + ' 篇文档</span>' +
+      '<span class="no-print">点任意一条跳到正文里的命中处</span></div>';
+    if (!res) {
+      html += '<div class="empty">在上面的搜索条里输入内容，回车或点右侧的放大镜开始搜索。</div>';
+    } else if (!res.groups.length) {
+      html += '<div class="empty">没有匹配「' + esc(q) + '」的内容。<br>' +
+        '搜索不区分大小写，但只在同一行内匹配，且只覆盖导入的 Markdown / 思维导图文档正文。</div>';
+    } else {
+      if (res.all > res.shown) {
+        html += '<div class="notice">命中太多，只列出前 ' + res.shown + ' 处（共 ' + res.all +
+          ' 处）。换个更长的关键词试试。</div>';
+      }
+      res.groups.forEach(function (g, gi) {
+        html += '<section class="sr-group" id="sr-g-' + gi + '"><div class="sr-head">' +
+          '<a class="sr-t" href="' + docHref(g.doc.path) + '">' + esc(g.doc.title) + '</a>' +
+          '<span class="sr-p">' + esc(g.doc.path) + '</span>' +
+          (g.graphic ? '<span class="sr-graph" title="整篇画成图，点开只能打开文档，定位不到命中处">图形文档 · 不定位</span>' : '') +
+          '<span class="sr-n">' + g.all + ' 处</span></div>';
+        g.hits.forEach(function (h) {
+          var href = g.graphic ? docHref(g.doc.path) : searchHref(g.doc.path, q, h.occ, h.sec && h.sec.id);
+          html += '<a class="sr-item" href="' + href + '">' +
+            '<span class="sr-sec">' + esc(h.sec ? Core.plain(h.sec.text, htmlMode()) : '文档开头') +
+            '<span class="sr-ln">第 ' + (h.line + 1) + ' 行</span></span>' +
+            '<span class="sr-ctx">' +
+            (h.before ? '<i>' + srMark(srCut(h.before), res.q) + '</i>' : '') +
+            '<b>' + srMark(srCut(h.text, h.col), res.q) + '</b>' +
+            (h.after ? '<i>' + srMark(srCut(h.after), res.q) + '</i>' : '') +
+            '</span></a>';
+        });
+        if (g.all > g.hits.length) {
+          html += '<span class="sr-more">这篇还有 ' + (g.all - g.hits.length) + ' 处没有列出</span>';
+        }
+        html += '</section>';
+      });
+    }
+    $('article').innerHTML = html + '</div>';
+    renderSearchNav(res);
+    popArticle();
+    window.scrollTo(0, 0);
+  }
+
+  /* 左栏的「结果文件导航」：点一条把视口移到正文里对应的那一组。
+     用 <button> 而不是 <a href>：导航项不该改 hash，一改就把结果页顶掉了。
+     离开结果页时 renderSidebar() 会把标题和目录树还原。 */
+  function renderSearchNav(res) {
+    var tree = $('tree');
+    $('sidebarTitle').textContent = '搜索结果导航';
+    if (!res) {
+      tree.innerHTML = '<div class="empty">还没输入关键词。</div>';
+    } else if (!res.groups.length) {
+      tree.innerHTML = '<div class="empty">没有匹配的文档。</div>';
+    } else {
+      var h = '<div class="dir">命中文件<span class="n">' + res.groups.length + ' 篇 · ' + res.all + ' 处</span></div>';
+      res.groups.forEach(function (g, gi) {
+        h += '<button type="button" class="docitem sr-nav" data-g="sr-g-' + gi + '">' +
+          '<span class="t">' + esc(g.doc.title) + ' <span class="hit">' + g.all + ' 处</span></span>' +
+          '<span class="s">' + esc(g.doc.path) + '</span></button>';
+      });
+      tree.innerHTML = h;
+      borrowLeftPane();          // 有东西可导航才把左栏借出来
+    }
+    $('sidebar').scrollTop = 0;
+  }
+  function searchNavJump(btn) {
+    var g = document.getElementById(btn.getAttribute('data-g'));
+    if (!g) return;
+    var items = $('tree').querySelectorAll('.sr-nav');
+    Array.prototype.forEach.call(items, function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    // 系统开了「减弱动效」就不滚，直接落位
+    var calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    g.scrollIntoView({ block: 'start', behavior: calm ? 'auto' : 'smooth' });     // 躲开顶栏与搜索条由 .sr-group 的 scroll-margin 负责
+    flashEl(g);
+    if (window.innerWidth < NARROW) setPane('left', false);
+  }
+
+  /* ---------- 页内命中高亮与跳转 ---------- */
+  var HIT_SKIP = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, NOSCRIPT: 1, HEAD: 1, MARK: 1 };
+  function highlightHits(root, q) {
+    var low = String(q || '').toLowerCase();
+    if (!low) return [];
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        if (!n.nodeValue || n.nodeValue.toLowerCase().indexOf(low) < 0) return NodeFilter.FILTER_REJECT;
+        for (var p = n.parentElement; p && p !== root; p = p.parentElement) {
+          if (p.namespaceURI !== XHTML) return NodeFilter.FILTER_REJECT;   // svg 里的文字包不出 mark
+          if (HIT_SKIP[String(p.tagName).toUpperCase()]) return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    var nodes = [], n;
+    while ((n = walker.nextNode())) nodes.push(n);
+    var marks = [];
+    nodes.forEach(function (tn) {
+      var text = tn.nodeValue, lt = text.toLowerCase(), at = lt.indexOf(low), pos = 0;
+      var frag = document.createDocumentFragment();
+      while (at >= 0) {
+        if (at > pos) frag.appendChild(document.createTextNode(text.slice(pos, at)));
+        var mk = document.createElement('mark');
+        mk.className = 'sr-hit';
+        mk.textContent = text.slice(at, at + low.length);
+        frag.appendChild(mk); marks.push(mk);
+        pos = at + low.length; at = lt.indexOf(low, pos);
+      }
+      if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+      if (tn.parentNode) tn.parentNode.replaceChild(frag, tn);
+    });
+    return marks;
+  }
+  function clearHits() {
+    var art = $('article');
+    var ms = art.querySelectorAll('mark.sr-hit');
+    Array.prototype.forEach.call(ms, function (m) {
+      var p = m.parentNode;
+      while (m.firstChild) p.insertBefore(m.firstChild, m);
+      p.removeChild(m);
+    });
+    if (ms.length && art.normalize) art.normalize();
+    return ms.length;
+  }
+  /* 跳到第 occ 处命中。序号是「源码里的第几处」，正文里的顺序通常一致，
+     但命中落在被图形替换掉的围栏里时会对不上 —— 所以知道章节就先按章节取第一处。 */
+  function jumpToMatch(q, occ, section) {
+    var marks = highlightHits($('article'), q);
+    if (!marks.length) return false;
+    // 命中可能落在被折叠起来的源码块里，滚过去也看不见：只在看得见的那些里挑
+    var vis = marks.filter(function (m) { return m.offsetParent !== null; });
+    var el = null;
+    var anchor = section ? document.getElementById(section) : null;
+    if (anchor) {
+      for (var i = 0; i < vis.length; i++) {
+        if (vis[i] === anchor ||
+          (anchor.compareDocumentPosition(vis[i]) & Node.DOCUMENT_POSITION_FOLLOWING)) { el = vis[i]; break; }
+      }
+    }
+    if (!el) el = vis[Math.max(0, Math.min(Number(occ) || 0, vis.length - 1))] || marks[0];
+    el.className += ' sr-cur';
+    if (el.offsetParent === null) return false;    // 一处都看不见：退回按章节定位
+    el.scrollIntoView({ block: 'center' });
+    // 图是异步画的，画完正文会上下位移，落点得按新位置再对一次
+    if (state.mgPromise && state.mgPromise.then) {
+      state.mgPromise.then(function () {
+        if (document.body.contains(el)) el.scrollIntoView({ block: 'center' });
+      }).catch(function () {});
+    }
+    return true;
+  }
+
   /* ---------- 首页 ---------- */
   function renderOverview() {
     state.current = null;
@@ -559,7 +820,7 @@
   }
 
   /* ---------- 正文 ---------- */
-  function renderDoc(path, section) {
+  function renderDoc(path, section, jump) {
     var doc = state.byPath[path];
     if (!doc) { renderOverview(); return; }
     state.current = doc;
@@ -607,9 +868,11 @@
     $('nextBtn').disabled = idx < 0 || idx >= state.visible.length - 1;
 
     requestAnimationFrame(function () {
-      var el = section ? document.getElementById(section) : null;
-      if (el) { el.scrollIntoView({ block: 'start' }); flashHeading(el); }
-      else window.scrollTo(0, 0);
+      if (!(jump && jump.q && jumpToMatch(jump.q, jump.occ, section))) {
+        var el = section ? document.getElementById(section) : null;
+        if (el) { el.scrollIntoView({ block: 'start' }); flashEl(el); }
+        else window.scrollTo(0, 0);
+      }
       setupSpy();
     });
   }
@@ -1674,9 +1937,16 @@
   /* ---------- 路由 ---------- */
   function route() {    var h = parseHash();
     if (h.p && state.byPath[h.p]) {
+      returnLeftPane();
+      var jump = h.q ? { q: h.q, occ: Number(h.k) || 0 } : null;
+      if (jump) fillSearchBar(jump.q);
       if (isMindmapDoc(state.byPath[h.p])) renderMindmapDoc(state.byPath[h.p]);
-      else renderDoc(h.p, h.h || null);
+      else renderDoc(h.p, h.h || null, jump);
+    } else if (h.s !== undefined) {
+      fillSearchBar(h.s, true);
+      renderSearchPage(h.s);
     } else {
+      returnLeftPane();
       renderOverview();
     }
   }
@@ -1686,11 +1956,43 @@
     applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
   };
   $('printBtn').onclick = function () { window.print(); };
+  /* ---------- 顶栏搜索条 ---------- */
+  function searchBarOpen() { return document.body.classList.contains('search-open'); }
+  function setSearchBar(open, focus) {
+    document.body.classList.toggle('search-open', !!open);
+    $('searchBtn').setAttribute('aria-expanded', String(!!open));
+    if (open) {
+      if (focus !== false) { $('topSearch').focus(); $('topSearch').select(); }
+    } else $('topSearch').blur();
+  }
+  function fillSearchBar(q, collapse) {      // 从地址栏回填：不抢焦点，默认展开、传 collapse 则收起
+    $('topSearch').value = String(q || '');
+    if (collapse) setSearchBar(false);
+    else if (String(q || '')) setSearchBar(true, false);
+  }
+  $('searchBtn').onclick = function () { setSearchBar(!searchBarOpen()); };
+  $('searchBar').onsubmit = function (e) {
+    e.preventDefault();
+    location.hash = '#s=' + enc($('topSearch').value.trim());
+    setSearchBar(false);        // 同关键词重复提交不触发 hashchange，这里无条件收一次
+  };
+  $('topClear').onclick = function () {
+    $('topSearch').value = '';
+    clearHits();
+    $('topSearch').focus();
+  };
+  $('topSearch').onkeydown = function (e) {
+    if (e.key === 'Escape') { e.preventDefault(); setSearchBar(false); }
+  };
   $('linkBtn').onclick = function () {
     var btn = this;
     var done = function () {
-      btn.textContent = '已复制';
-      setTimeout(function () { btn.textContent = '链接'; }, 1400);
+      btn.classList.add('copied');
+      btn.setAttribute('title', '已复制');
+      setTimeout(function () {
+        btn.classList.remove('copied');
+        btn.setAttribute('title', '复制当前文档链接');
+      }, 1400);
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(location.href).then(done, function () { window.prompt('复制链接：', location.href); });
@@ -1725,6 +2027,8 @@
     if (mgBtn) { mgAct(mgBtn); return; }
     var oitem = e.target.closest('.mm-o-item');
     if (oitem) { mindmapOutlineActivate(oitem, !e.target.closest('.mm-o-caret')); return; }
+    var srnav = e.target.closest('.sr-nav');
+    if (srnav) { searchNavJump(srnav); return; }
     if (e.target.closest('a.docitem') && window.innerWidth < NARROW) setPane('left', false);
   });
   $('tocList').addEventListener('keydown', function (e) {
@@ -1847,6 +2151,21 @@
       });
     },
     rerenderMermaid: rerenderMermaid,
+    /* 全文搜索：结果数、页内命中高亮、当前定位到的那一处、搜索条状态 */
+    searchAll: searchAll,
+    searchHits: function () { return $('article').querySelectorAll('mark.sr-hit').length; },
+    currentHit: function () { var m = $('article').querySelector('mark.sr-cur'); return m ? m.textContent : null; },
+    searchBarOpen: searchBarOpen,
+    searchInput: function () { return $('topSearch').value; },
+    searchNav: function () {
+      var items = $('tree').querySelectorAll('.sr-nav');
+      return {
+        title: $('sidebarTitle').textContent,
+        items: items.length,
+        active: $('tree').querySelector('.sr-nav.active') ?
+          $('tree').querySelector('.sr-nav.active').getAttribute('data-g') : null
+      };
+    },
     exportMermaidSvg: function (i) {
       var el = mgBlocks()[Number(i) || 0];
       return el ? exportMermaidSvg(el) : null;

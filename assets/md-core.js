@@ -162,7 +162,8 @@ var MarkdownCore = (function () {
         level: m[1].length,
         text: m[2],
         id: slugify(m[2], used, mode),
-        num: headingNumber(m[2], mode)
+        num: headingNumber(m[2], mode),
+        line: i                      // 所在行号（0 基）：搜索命中行要知道自己落在哪个标题之下
       });
     }
     return out;

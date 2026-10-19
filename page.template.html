@@ -16,15 +16,41 @@
   </button>
   <div class="brand"><span class="logo" aria-hidden="true"></span><span id="brandTitle">文档浏览器</span> <span class="bs" id="brandSub"></span></div>
   <div class="grow"><div class="path" id="docPath"></div></div>
-  <button class="btn" id="prevBtn" title="上一篇">‹<span class="lbl"> 上一篇</span></button>
-  <button class="btn" id="nextBtn" title="下一篇"><span class="lbl">下一篇 </span>›</button>
-  <button class="btn" id="printBtn" title="打印 / 导出 PDF">打印</button>
-  <button class="btn" id="linkBtn" title="复制当前文档链接">链接</button>
-  <button class="btn" id="themeBtn" title="切换深/浅色">深色</button>
+  <button class="btn icon" id="prevBtn" title="上一篇" aria-label="上一篇">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M10.5 3 6 8l4.5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="btn icon" id="nextBtn" title="下一篇" aria-label="下一篇">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M5.5 3 10 8l-4.5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="btn icon" id="searchBtn" title="搜索全部文档" aria-label="搜索全部文档" aria-expanded="false" aria-controls="searchBar">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.4 10.4 14 14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+  </button>
+  <button class="btn icon" id="printBtn" title="打印 / 导出 PDF" aria-label="打印 / 导出 PDF">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M4.5 6V2.6h7V6M4.5 9.3h7v4.1h-7z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><rect x="2" y="6" width="12" height="4.4" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="12.2" cy="8" r=".7" fill="currentColor"/></svg>
+  </button>
+  <button class="btn icon" id="linkBtn" title="复制当前文档链接" aria-label="复制当前文档链接">
+    <svg class="i-link" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <svg class="i-check" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M3 8.6 6.2 11.8 13 4.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="btn icon" id="themeBtn" title="切换深/浅色" aria-label="切换深/浅色主题">
+    <svg class="i-sun" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <svg class="i-moon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+  </button>
   <button class="btn icon" id="toggleRight" title="显示/隐藏右侧目录栏（快捷键 ] ）" aria-pressed="true" aria-controls="tocPane">
     <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor"/><line x1="10" y1="2.5" x2="10" y2="13.5" stroke="currentColor"/></svg>
   </button>
 </header>
+
+<form class="searchbar" id="searchBar" role="search" autocomplete="off">
+  <svg class="sb-mg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.4 10.4 14 14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+  <input class="sb-input" id="topSearch" type="text" placeholder="搜索全部文档内容…（回车搜索 · Esc 收起）" aria-label="搜索内容" spellcheck="false">
+  <button class="btn icon" type="button" id="topClear" title="清除" aria-label="清除输入内容">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+  </button>
+  <button class="btn icon" type="submit" id="topGo" title="搜索" aria-label="搜索">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.4 10.4 14 14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+  </button>
+</form>
 
 <div class="layout">
   <aside class="sidebar" id="sidebar">
