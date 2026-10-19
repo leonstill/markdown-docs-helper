@@ -51,7 +51,7 @@ const tplScriptClose = (tpl.match(/<\/script>/g) || []).length;
 tplScriptOpen === tplScriptClose ? ok(`<script> ${tplScriptOpen} 对`) : fail(`<script> ${tplScriptOpen}/${tplScriptClose}`);
 
 /* 模板里的占位块必须是空块：数据由构建写入，引擎由构建填内联或外链 */
-const PLACEHOLDERS = ['viewer-config', 'docs-snapshot', 'vendor-d3', 'vendor-markmap-lib', 'vendor-markmap-view', 'vendor-mermaid'];
+const PLACEHOLDERS = ['viewer-config', 'docs-snapshot', 'build-info', 'vendor-d3', 'vendor-markmap-lib', 'vendor-markmap-view', 'vendor-mermaid'];
 for (const id of PLACEHOLDERS) {
   const m = new RegExp(`<script id="${id}"([^>]*)>([\\s\\S]*?)</script>`).exec(tpl);
   if (!m) { fail(`模板缺少占位块 <script id="${id}">`); continue; }
@@ -76,11 +76,21 @@ for (const id of ['mindmap-core', 'mermaid-core', 'md-core', 'md-app']) {
 console.log('[2] 离线产物结构（md-viewer.html）');
 html.length > tpl.length ? ok(`产物比模板大（模板 ${(tpl.length / 1024).toFixed(1)} KB → 产物 ${(html.length / 1024).toFixed(0)} KB，说明数据与引擎都填进去了）`)
   : fail(`产物没有比模板大，占位块可能没填上（模板 ${tpl.length} / 产物 ${html.length}）`);
-for (const id of ['viewer-config', 'docs-snapshot']) {
+for (const id of ['viewer-config', 'docs-snapshot', 'build-info']) {
   const m = new RegExp(`<script id="${id}" type="application/json">([\\s\\S]*?)</script>`).exec(html);
   if (!m) { fail(`产物缺少 <script id="${id}">`); continue; }
   try { JSON.parse(m[1]); ok(`${id}（JSON 可解析）`); }
   catch (e) { fail(`${id} JSON 解析失败：${e.message}`); }
+}
+/* 版本块的内容要能对上根目录的 VERSION：pre-commit 刷的就是它 */
+const biMatch = /<script id="build-info" type="application\/json">([\s\S]*?)<\/script>/.exec(html);
+const versionFile = path.join(ROOT, 'VERSION');
+if (biMatch && fs.existsSync(versionFile)) {
+  const bi = JSON.parse(biMatch[1]);
+  const raw = fs.readFileSync(versionFile, 'utf8').trim();
+  `${bi.version}+${bi.commit}` === raw
+    ? ok(`build-info 与根目录 VERSION 一致（${raw}）`)
+    : fail(`build-info ${bi.version}+${bi.commit} 与 VERSION ${raw} 不一致（产物没跟着重建？）`);
 }
 /* 引擎块：内联（大块源码）或按需留空（data-disabled / data-unused），两者都必须无裸 </script */
 for (const id of PLACEHOLDERS.filter((x) => x.startsWith('vendor-'))) {

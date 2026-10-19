@@ -94,11 +94,11 @@ for (const id of BUNDLE_IDS) {
   }
 }
 const tags = (html.match(/<script/g) || []).length;
-/* 6 段固定脚本：配置、快照、mindmap-core、mermaid-core、md-core、md-app（后四段是 assets/ 外链） */
-const BASE_SCRIPTS = 6;
+/* 7 段固定脚本：配置、快照、版本、mindmap-core、mermaid-core、md-core、md-app（后四段是 assets/ 外链） */
+const BASE_SCRIPTS = 7;
 check(tags === BASE_SCRIPTS + BUNDLE_IDS.length,
-  `页面里 <script 标签共 ${BASE_SCRIPTS + BUNDLE_IDS.length} 个（配置 + 快照 + 4 段自研 + ${BUNDLE_IDS.length} 段引擎），实际 ${tags}`);
-for (const id of ['viewer-config', 'docs-snapshot']) {
+  `页面里 <script 标签共 ${BASE_SCRIPTS + BUNDLE_IDS.length} 个（配置 + 快照 + 版本 + 4 段自研 + ${BUNDLE_IDS.length} 段引擎），实际 ${tags}`);
+for (const id of ['viewer-config', 'docs-snapshot', 'build-info']) {
   check(html.includes(`<script id="${id}"`), `页面里有 <script id="${id}">`);
 }
 /* 自研脚本已抽到 assets/：页面只留外链，源码在 assets/<id>.js */

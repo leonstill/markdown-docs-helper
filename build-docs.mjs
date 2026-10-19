@@ -12,6 +12,8 @@
  *         · config.json      —— 仅在缺失时生成默认配置
  *       --serve 与 --check 不写任何文件：--serve 把实时版页面放在内存里响应，
  *       --check 只做比对。所以 --serve 指定哪个目录，都不会顶掉上面这些产物。
+ *       唯一的例外是 VERSION：它只由 --stamp-version / --install-hook 写，
+ *       构建本身也只读它，把里面那行版本串填进产物的 build-info 占位块。
  *
  * 两种页面（都不联网，只用工程内的本地资源）：
  *   md-viewer.html  离线单文件：引擎整段内联，file:// 双击即可看（构建时刷新）
@@ -29,6 +31,8 @@
  *   node build-docs.mjs --serve --port 9000 [目录]
  *   node build-docs.mjs --serve --lan [目录]   # 绑定所有网卡（0.0.0.0），同一局域网内可访问
  *   node build-docs.mjs --serve --host 192.168.1.20 [目录]   # 只绑定指定的本机地址
+ *   node build-docs.mjs --stamp-version          # 只刷 VERSION（package.json 的 version+提交短哈希）
+ *   node build-docs.mjs --install-hook           # 把 --stamp-version 装成 pre-commit 钩子，提交时自动刷
  *   node build-docs.mjs --help
  *
  * 目录位置随意（写在参数前后都行），但最多只能写一个；不写就是工程自带的 ./docs。
@@ -41,6 +45,11 @@
  *
  * 配置文件：config.json（标题、首页说明、左栏显示哪些文档、右侧目录层级等）。
  *           支持 // 与 /* *\/ 注释和尾随逗号；写错时页面会显示红色提示。
+ *
+ * 版本文件：VERSION（一行，形如 1.0.3+20a7f73 = package.json 的 version + 提交短哈希）。
+ *           由 --stamp-version 写、由 pre-commit 钩子在每次提交时自动刷新，构建只读它，
+ *           顶栏「关于」显示的就是这一行。pre-commit 时新提交的哈希还不存在，
+ *           所以记进去的是它的父提交：版本串里的提交标记天然落后一次提交，不是写错。
  *
  * 两种浏览方式：
  *   1) 直接双击 md-viewer.html（file://）——使用页面内置数据，零依赖、可离线；
@@ -57,6 +66,7 @@ import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
@@ -83,8 +93,11 @@ const INDEX_HTML = path.join(ROOT, 'index.html');       // 实时服务版（生
 const TEMPLATE = path.join(ROOT, 'page.template.html'); // 两个页面唯一的布局来源
 const INDEX = path.join(ROOT, 'docs-index.json');
 const CONFIG = path.join(ROOT, 'config.json');
+const PKG = path.join(ROOT, 'package.json');
+const VERSION_FILE = path.join(ROOT, 'VERSION');    // 每次提交由 pre-commit 钩子刷新，见 --stamp-version
 const SNAPSHOT_RE = /(<script id="docs-snapshot" type="application\/json">)([\s\S]*?)(<\/script>)/;
 const CONFIG_RE = /(<script id="viewer-config" type="application\/json">)([\s\S]*?)(<\/script>)/;
+const BUILD_INFO_RE = /(<script id="build-info" type="application\/json">)([\s\S]*?)(<\/script>)/;
 const DEFAULT_PORT = 8899;
 /* 默认只听环回：不给参数就不会把文档暴露到网络上。--lan / --host 才对外。 */
 const DEFAULT_HOST = '127.0.0.1';
@@ -483,16 +496,95 @@ async function readBundles(cfg, ctx = {}) {
   return out;
 }
 
+/* ---------- 版本信息：根目录 VERSION = package.json 的 version + 提交标记 ----------
+   VERSION 由 --stamp-version 写（正常是 pre-commit 钩子去调），构建只读它，
+   把这一行拆成 { version, commit } 填进产物的 build-info 占位块，页面「关于」直接显示。
+   读不到就退回 package.json 的 version、提交标记记为 nogit（从压缩包解压出来的工程没有 .git）。 */
+function readPkg() {
+  try { return JSON.parse(fs.readFileSync(PKG, 'utf8')); } catch (e) { return {}; }
+}
+function gitShortHead() {
+  try {
+    return execFileSync('git', ['rev-parse', '--short', 'HEAD'],
+      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (e) { return ''; }
+}
+function readBuildInfo() {
+  const pkg = readPkg();
+  const raw = fs.existsSync(VERSION_FILE) ? fs.readFileSync(VERSION_FILE, 'utf8').trim() : '';
+  const stamped = /^([^+\s]+)\+(\S+)$/.exec(raw);
+  return {
+    product: pkg.name || 'markdown-docs-helper',
+    version: stamped ? stamped[1] : (pkg.version || '0.0.0'),
+    commit: stamped ? stamped[2] : 'nogit',
+    source: stamped ? 'VERSION' : 'package.json',
+  };
+}
+
+/* 提交前把版本串刷进 VERSION。
+   pre-commit 时新提交的哈希还不存在，所以记的是当下 HEAD（也就是这次提交的父提交）：
+   产物里显示的提交标记天生落后一次提交，这是钩子机制决定的，不是笔误。 */
+function stampVersion() {
+  const pkg = readPkg();
+  if (!pkg.version) {
+    console.error('✗ package.json 里没有 version 字段，没法生成 VERSION');
+    return 1;
+  }
+  const next = `${pkg.version}+${gitShortHead() || 'nogit'}\n`;
+  const cur = fs.existsSync(VERSION_FILE) ? fs.readFileSync(VERSION_FILE, 'utf8') : '';
+  /* 只比内容：autocrlf 会把检出的文件换成 CRLF，逐字节比会让钩子每次提交都重写一遍没变的东西 */
+  if (cur.trim() === next.trim()) {
+    console.log(`· VERSION 无需变化：${next.trim()}`);
+    return 0;
+  }
+  fs.writeFileSync(VERSION_FILE, next, 'utf8');
+  console.log(cur.trim() ? `✓ VERSION：${cur.trim()} → ${next.trim()}` : `✓ VERSION 已生成：${next.trim()}`);
+  return 0;
+}
+
+const HOOK_MARK = 'build-docs.mjs --stamp-version';
+const HOOK_BODY = [
+  '#!/bin/sh',
+  '# 提交前刷新 VERSION（package.json 的 version + 提交标记），并把改动一起纳入本次提交。',
+  '# 本文件由 node build-docs.mjs --install-hook 生成；删掉它就退回手工维护 VERSION。',
+  'node build-docs.mjs --stamp-version || exit 1',
+  'git add VERSION',
+  '',
+].join('\n');
+/* 只装这一个 pre-commit 文件，不碰 core.hooksPath：
+   后者会换掉整个钩子目录，把仓库里已有的 post-commit / post-checkout 一并顶掉。 */
+function installHook() {
+  const hooks = path.join(ROOT, '.git', 'hooks');
+  if (!fs.existsSync(path.join(ROOT, '.git'))) {
+    console.error(`✗ 这里不是 git 仓库（找不到 .git）：${ROOT}`);
+    return 1;
+  }
+  if (!fs.existsSync(hooks)) fs.mkdirSync(hooks, { recursive: true });
+  const target = path.join(hooks, 'pre-commit');
+  if (fs.existsSync(target) && !fs.readFileSync(target, 'utf8').includes(HOOK_MARK)) {
+    console.error(`✗ 已有一个不是本工具生成的 pre-commit 钩子：${target}`);
+    console.error('  自己把这两行加进去即可：node build-docs.mjs --stamp-version && git add VERSION');
+    return 1;
+  }
+  fs.writeFileSync(target, HOOK_BODY, { encoding: 'utf8', mode: 0o755 });
+  fs.chmodSync(target, 0o755);
+  console.log(`✓ 已安装 pre-commit 钩子：${target}`);
+  console.log('  下一次提交起 VERSION 自动更新（钩子只存在于 .git 里，换机器要再跑一次 --install-hook）');
+  return 0;
+}
+
 /* ---------- 两个页面的生成：模板 → 一次性替换 → md-viewer.html / index.html ----------
-   模板 page.template.html 里只有五个空占位，其余全是纯 HTML，一眼能看懂：
+   模板 page.template.html 里只有六个空占位，其余全是纯 HTML，一眼能看懂：
      <script id="viewer-config" type="application/json"></script>   页面配置
      <script id="docs-snapshot" type="application/json"></script>   文档快照
+     <script id="build-info" type="application/json"></script>      版本串（两个产物同一份）
      <script id="vendor-*"></script>                                引擎空块（4 段）
    两个产物的差别**只有**这些占位，所以用同一个替换函数、同一份文档数据生成，
    不存在“先写一个文件再回头改另一个”的二次加工。 */
-function renderPage(template, { cfgText, snapText, bundles, mode }) {
+function renderPage(template, { cfgText, snapText, buildInfoText, bundles, mode }) {
   const value = (id) => {
     if (id === 'viewer-config') return cfgText;
+    if (id === 'build-info') return buildInfoText;
     if (id === 'docs-snapshot') return mode === 'realtime' ? '{}' : snapText;
     const b = bundles.find((x) => x.id === id);
     if (!b) throw new Error(`模板里出现了未知脚本块：${id}`);
@@ -502,11 +594,11 @@ function renderPage(template, { cfgText, snapText, bundles, mode }) {
   };
   /* 一次性扫描所有占位块，按出现顺序拼接，避免「替换完再去重新定位下一个」那种脆弱写法。
      每个块都替换成完整的 <script ...>...</script>，不留半截标签。 */
-  const re = /<script id="(viewer-config|docs-snapshot|vendor-d3|vendor-markmap-lib|vendor-markmap-view|vendor-mermaid)"([^>]*)>([\s\S]*?)<\/script>/g;
+  const re = /<script id="(viewer-config|docs-snapshot|build-info|vendor-d3|vendor-markmap-lib|vendor-markmap-view|vendor-mermaid)"([^>]*)>([\s\S]*?)<\/script>/g;
   let out = '', last = 0, seen = 0, m;
   while ((m = re.exec(template))) {
     const id = m[1];
-    /* viewer-config / docs-snapshot 不在 bundles 里，只有 vendor-* 才是引擎块 */
+    /* viewer-config / docs-snapshot / build-info 不在 bundles 里，只有 vendor-* 才是引擎块 */
     const b = id.startsWith('vendor-') ? bundles.find((x) => x.id === id) : null;
     if (id.startsWith('vendor-') && !b) throw new Error(`模板里出现了未知脚本块：${id}`);
     const inner = value(id);
@@ -520,8 +612,8 @@ function renderPage(template, { cfgText, snapText, bundles, mode }) {
     seen++;
   }
   out += template.slice(last);
-  if (seen !== 2 + bundles.length) {
-    throw new Error(`模板里的占位块数量不对：期望 ${2 + bundles.length} 个，实际 ${seen} 个`);
+  if (seen !== 3 + bundles.length) {
+    throw new Error(`模板里的占位块数量不对：期望 ${3 + bundles.length} 个，实际 ${seen} 个`);
   }
   return out;
 }
@@ -547,24 +639,28 @@ async function build(mode = 'build') {
   const snap = snapshotPayload(docs, skipped);
   const idx = indexPayload(docs, skipped);
   const cfgText = renderConfig(cfg.value);
+  const buildInfo = readBuildInfo();
+  const buildInfoText = renderConfig(buildInfo);
   const needMermaid = mermaidEnabled(cfg.value) && needsMermaidEngine(docs);
   const bundles = await readBundles(cfg.value, { needMermaid });
   const template = await fsp.readFile(TEMPLATE, 'utf8');
   const wantOffline = mode !== 'serve';   // 离线单文件（引擎内联）要不要拼：--serve 用不上
   /* 文档快照文本只有离线单文件用得上（实时版页面里那块恒为 {}）；--serve 就省掉这份拼接 */
   const snapText = wantOffline ? renderSnapshot(snap) : '';
-  const realtime = renderPage(template, { cfgText, snapText, bundles, mode: 'realtime' });
+  const realtime = renderPage(template, { cfgText, snapText, buildInfoText, bundles, mode: 'realtime' });
   const next = wantOffline
-    ? renderPage(template, { cfgText, snapText, bundles, mode: 'offline' })
+    ? renderPage(template, { cfgText, snapText, buildInfoText, bundles, mode: 'offline' })
     : null;
 
   if (check) {
     const viewerText = await fsp.readFile(VIEWER, 'utf8');
     const vm = SNAPSHOT_RE.exec(viewerText);
     const vc = CONFIG_RE.exec(viewerText);
+    const bi = BUILD_INFO_RE.exec(viewerText);
     const snapStale = !vm || isStale(vm[2], snap);
     const idxStale = !fs.existsSync(INDEX) || isStale(await fsp.readFile(INDEX, 'utf8'), idx);
     const cfgStale = !vc || isConfigStale(vc[2], cfg.value);
+    const infoStale = !bi || isConfigStale(bi[2], buildInfo);
     const embedded = BUNDLES.map((b) => {
       const bm = bundleRe(b.id).exec(viewerText);
       return bm ? bm[2].trim() : '';
@@ -575,11 +671,12 @@ async function build(mode = 'build') {
     /* 新克隆的仓库还没构建过：index.html 存在才校验 */
     const realtimeStale = fs.existsSync(INDEX_HTML) &&
       pageSignature(await fsp.readFile(INDEX_HTML, 'utf8')) !== pageSignature(realtime);
-    if (snapStale || cfgStale || idxStale || bundleStale || viewerStale || realtimeStale) {
+    if (snapStale || cfgStale || idxStale || infoStale || bundleStale || viewerStale || realtimeStale) {
       const which = [
         snapStale && '页面内置文档快照',
         cfgStale && '页面内置配置',
         idxStale && 'docs-index.json',
+        infoStale && `页面内置版本串（VERSION 现在是 ${buildInfo.version}+${buildInfo.commit}）`,
         bundleStale && '页面内置引擎（markmap / mermaid 源码）',
         viewerStale && 'md-viewer.html（与 page.template.html 不一致，或模板被手改过）',
         realtimeStale && 'index.html（实时版页面）',
@@ -589,6 +686,7 @@ async function build(mode = 'build') {
       return 1;
     }
     console.log(`✓ 都是最新的（${docs.length} 篇文档，来自 ${path.relative(ROOT, DOCS_DIR) || '.'}，配置来自 config.json` +
+      `，版本 ${buildInfo.version}+${buildInfo.commit}` +
       `${fs.existsSync(INDEX_HTML) ? '，index.html 实时版页面已同步' : '，index.html 尚未生成（跑 node build-docs.mjs 生成）'}）`);
     return 0;
   }
@@ -639,6 +737,9 @@ async function build(mode = 'build') {
       ((sb.exclude || []).length ? ` · 排除 ${(sb.exclude || []).length} 项` : '') +
       (hidden ? ` · 隐藏 ${hidden} 篇` : ''));
     console.log(`  配置来源：config.json（${cfg.source === 'file' ? '已读取' : '缺失，用默认值'}）`);
+    console.log(`  版本：${buildInfo.version}+${buildInfo.commit}` +
+      (buildInfo.source === 'VERSION' ? '（VERSION）'
+        : '（VERSION 缺失或格式不对，退回 package.json；生成它：node build-docs.mjs --stamp-version）'));
     console.log(`  离线单文件：${Buffer.byteLength(next, 'utf8') / 1024 | 0} KB` +
       `（文档数据 ${Buffer.byteLength(snapText, 'utf8') / 1024 | 0} KB · 内联引擎 ${bundles.reduce((n, b) => n + (b.text || '').length, 0) / 1024 | 0} KB）`);
     console.log('');
@@ -893,7 +994,10 @@ function cliError(msg) {
 }
 
 const MODE_FLAGS = new Map([['--serve', 'serve'], ['--check', 'check']]);
+/* 两个「只干这一件事」的命令：都不跑构建，所以和模式/端口/目录互斥 */
+const ACTION_FLAGS = new Set(['--stamp-version', '--install-hook']);
 let mode = 'build';           // build | check | serve
+let action = null;            // --stamp-version | --install-hook
 let port = DEFAULT_PORT;
 let portGiven = false;
 let host = DEFAULT_HOST;      // 监听地址：默认只听环回
@@ -905,7 +1009,12 @@ for (let i = 0; i < argv.length; i++) {
 
   if (a === '--help' || a === '-h') {
     printHelp();
+  } else if (ACTION_FLAGS.has(a)) {
+    if (action) cliError(`${a} 与 ${action} 只能选一个`);
+    if (mode !== 'build') cliError(`${a} 是独立命令，不与 --${mode} 一起用`);
+    action = a;
   } else if (MODE_FLAGS.has(a)) {
+    if (action) cliError(`${a} 与 ${action} 只能选一个`);
     if (mode !== 'build') {
       cliError(`--serve 与 --check 只能选一个（已经写了 --${mode}，又出现 ${a}）`);
     }
@@ -959,6 +1068,17 @@ if (portGiven && mode !== 'serve') {
 }
 if (hostFlag && mode !== 'serve') {
   cliError(`${hostFlag} 只在 --serve 模式下有效，例如：node build-docs.mjs --serve --lan`);
+}
+
+if (action && docsDir !== null) {
+  cliError(`${action} 不接受文档目录参数：${docsDir}`);
+}
+
+if (action === '--stamp-version') {
+  process.exit(stampVersion());
+}
+if (action === '--install-hook') {
+  process.exit(installHook());
 }
 
 if (docsDir !== null) {

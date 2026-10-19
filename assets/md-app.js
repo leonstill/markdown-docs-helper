@@ -358,6 +358,7 @@
         startW = cwGet();
         grab = startW - cwFromPointer(e.clientX, 0);
         el.setPointerCapture(e.pointerId);
+        el.classList.add('w-holding');
         document.body.classList.add('w-dragging');
         e.preventDefault();               // 顺带掐掉拖动路上选中正文文字
       });
@@ -370,6 +371,7 @@
         if (!dragging) return;
         dragging = false;
         try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+        el.classList.remove('w-holding');
         document.body.classList.remove('w-dragging');
         cwSave();                         // 只在松手时落盘，拖一行代码存一次没必要
       }
@@ -2082,6 +2084,76 @@
     } else { window.prompt('复制链接：', location.href); }
   };
   $('toggleLeft').onclick = function () { togglePane('left'); };
+  /* ---------- 品牌区下拉菜单：帮助 / 关于…（两个原生 <dialog>） ---------- */
+  var brandWrap = $('brandBtn').parentNode;
+  function brandMenuOpen() { return !$('brandMenu').hidden; }
+  function setBrandMenu(open) {
+    $('brandMenu').hidden = !open;
+    $('brandBtn').setAttribute('aria-expanded', String(!!open));
+  }
+  function brandMenuItems() {
+    return [].slice.call($('brandMenu').querySelectorAll('.menu-item'));
+  }
+  $('brandBtn').onclick = function (e) {
+    var open = !brandMenuOpen();
+    setBrandMenu(open);
+    /* 键盘打开菜单：焦点直接进到第一项，否则方向键只能原地按（e.detail===0 = 键盘触发的 click） */
+    if (open && e.detail === 0) { var first = brandMenuItems()[0]; if (first) first.focus(); }
+  };
+  /* 挂在上层容器上：焦点在品牌按钮或菜单项上，方向键都收得到 */
+  brandWrap.addEventListener('keydown', function (e) {
+    if (!brandMenuOpen()) return;
+    var items = brandMenuItems();
+    if (!items.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      var d = e.key === 'ArrowDown' ? 1 : -1;
+      var i = items.indexOf(document.activeElement);
+      items[i < 0 ? (d > 0 ? 0 : items.length - 1) : (i + d + items.length) % items.length].focus();
+    } else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+    else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+  });
+  /* 点品牌区外面关掉菜单；判定含品牌按钮本身，所以点它仍然只走上面那次开合切换 */
+  document.addEventListener('pointerdown', function (e) {
+    if (brandMenuOpen() && !brandWrap.contains(e.target)) setBrandMenu(false);
+  });
+  /* 键盘用户 Tab 走出菜单后，条子不该还挂在页面上 */
+  brandWrap.addEventListener('focusout', function (e) {
+    if (brandMenuOpen() && !brandWrap.contains(e.relatedTarget)) setBrandMenu(false);
+  });
+
+  function openDialog(id) {
+    setBrandMenu(false);
+    $(id).showModal();
+  }
+  [].forEach.call(document.querySelectorAll('.dlg'), function (dlg) {
+    [].forEach.call(dlg.querySelectorAll('[data-close]'), function (btn) {
+      btn.onclick = function () { dlg.close(); };
+    });
+    /* click 落在 dialog 元素自身（而不是里面的块）= 点在内容盒之外的留白/背景 */
+    dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+  });
+  $('helpMenuItem').onclick = function () { openDialog('helpDialog'); };
+  $('aboutMenuItem').onclick = function () { fillAbout(); openDialog('aboutDialog'); };
+
+  function readBuildInfo() {
+    try { return JSON.parse($('build-info').textContent); } catch (e) { return null; }
+  }
+  function fillAbout() {
+    var info = readBuildInfo();
+    $('aboutName').textContent = state.cfg.title || 'Markdown 文档浏览器';
+    if (!info) {
+      $('aboutProduct').textContent = $('aboutVersion').textContent = $('aboutCommit').textContent = '未知';
+      $('aboutNote').textContent = '页面里没有 build-info 注入块：这份产物不是 build-docs.mjs 生成的。';
+      return;
+    }
+    $('aboutProduct').textContent = info.product || '';
+    $('aboutVersion').textContent = info.version || '';
+    $('aboutCommit').textContent = info.commit || '';
+    $('aboutNote').textContent = info.source === 'VERSION'
+      ? '版本来自工程根目录的 VERSION 文件，每次提交由 pre-commit 钩子刷新。pre-commit 时新提交的哈希还不存在，记进去的是它的父提交，所以这个提交标记恒比当前提交落后一次。'
+      : '没读到 VERSION 文件（或其格式不对），版本退回 package.json。生成它：node build-docs.mjs --stamp-version，或 --install-hook 让每次提交自动刷。';
+  }
   $('toggleRight').onclick = function () { togglePane('right'); };
   $('closeLeft').onclick = function () { setPane('left', false); };
   $('closeRight').onclick = function () { setPane('right', false); };
@@ -2162,8 +2234,11 @@
   document.addEventListener('keydown', function (e) {
     var tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea') return;
-    // Esc 先管全屏：搜索框里的 Esc（清空搜索）在上面的 input 分支里已经返回了
+    // 模态框开着：`[` `]` `/` 不该去动背后的页面，Esc 也交给 <dialog> 自己处理
+    if (document.querySelector('dialog[open]')) return;
+    // Esc 先管品牌菜单，再管全屏：搜索框里的 Esc（清空搜索）在上面的 input 分支里已经返回了
     if (e.key === 'Escape') {
+      if (brandMenuOpen()) { e.preventDefault(); setBrandMenu(false); $('brandBtn').focus(); return; }
       if (mgFullscreenOn()) { e.preventDefault(); exitMermaidFullscreen(); return; }
       if (mmFullscreenOn()) { e.preventDefault(); setMindmapFullscreen(false); }
       return;

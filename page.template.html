@@ -14,7 +14,15 @@
   <button class="btn icon" id="toggleLeft" title="显示/隐藏左侧目录栏（快捷键 [ ）" aria-pressed="false" aria-controls="sidebar">
     <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor"/><line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor"/></svg>
   </button>
-  <div class="brand"><span class="logo" aria-hidden="true"></span><span id="brandTitle">文档浏览器</span> <span class="bs" id="brandSub"></span></div>
+  <div class="brand-wrap">
+    <button class="brand" id="brandBtn" type="button" aria-haspopup="true" aria-expanded="false" title="帮助与关于">
+      <span class="logo" aria-hidden="true"></span><span id="brandTitle">文档浏览器</span> <span class="bs" id="brandSub"></span>
+    </button>
+    <div class="menu" id="brandMenu" role="menu" aria-labelledby="brandBtn" hidden>
+      <button class="menu-item" id="helpMenuItem" type="button" role="menuitem">帮助</button>
+      <button class="menu-item" id="aboutMenuItem" type="button" role="menuitem">关于…</button>
+    </div>
+  </div>
   <div class="grow"><div class="path" id="docPath"></div></div>
   <button class="btn icon" id="prevBtn" title="上一篇" aria-label="上一篇">
     <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M10.5 3 6 8l4.5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -83,11 +91,69 @@
 <div id="scrim"></div>
 
 <!-- ==================================================================
+     顶栏品牌菜单弹出的两个模态框（原生 <dialog>，showModal 自带焦点陷阱与 Esc 关闭）。
+     关于框里的版本 / 提交标记由下面的 build-info 注入块填，见 md-app.js 的 showAbout()。
+     ================================================================== -->
+<dialog class="dlg" id="aboutDialog" aria-labelledby="aboutHeading">
+  <div class="dlg-h">
+    <span class="dlg-t" id="aboutHeading">关于</span>
+    <button class="dlg-x" type="button" data-close title="关闭" aria-label="关闭">✕</button>
+  </div>
+  <div class="dlg-body">
+    <div class="about-name" id="aboutName">Markdown 文档浏览器</div>
+    <dl class="about-list">
+      <dt>软件名称</dt><dd id="aboutProduct">markdown-docs-helper</dd>
+      <dt>版本</dt><dd id="aboutVersion">—</dd>
+      <dt>提交</dt><dd id="aboutCommit">—</dd>
+    </dl>
+    <p class="about-note" id="aboutNote"></p>
+  </div>
+  <div class="dlg-foot"><button class="btn" type="button" data-close>关闭</button></div>
+</dialog>
+
+<dialog class="dlg" id="helpDialog" aria-labelledby="helpHeading">
+  <div class="dlg-h">
+    <span class="dlg-t" id="helpHeading">帮助</span>
+    <button class="dlg-x" type="button" data-close title="关闭" aria-label="关闭">✕</button>
+  </div>
+  <div class="dlg-body">
+    <h3 class="help-h">三栏与工具栏</h3>
+    <p class="help-p">左栏是文档目录（<kbd>[</kbd>），右栏是本篇大纲（<kbd>]</kbd>）。顶栏从左到右：
+      左栏开关、本菜单、上一篇 / 下一篇、全文搜索、打印或导出 PDF、复制当前文档链接、深浅色切换、右栏开关。</p>
+    <h3 class="help-h">快捷键</h3>
+    <dl class="help-keys">
+      <dt><kbd>[</kbd> / <kbd>]</kbd></dt><dd>收起 / 展开左侧目录栏、右侧大纲栏</dd>
+      <dt><kbd>/</kbd></dt><dd>聚焦左栏的搜索框</dd>
+      <dt><kbd>Esc</kbd></dt><dd>收起搜索条 / 关闭本对话框 / 退出图表全屏</dd>
+      <dt><kbd>Ctrl</kbd>+<kbd>P</kbd></dt><dd>打印或导出 PDF</dd>
+    </dl>
+    <h3 class="help-h">正文宽度</h3>
+    <p class="help-p">把鼠标移到正文左或右的边缘，出现竖线后按住横向拖动，正文会<strong>对称</strong>变宽变窄；
+      拖动时两侧竖线同时亮起，两条线之间就是当下正文的宽度。双击任一条竖线回到默认宽度。
+      拖出来的宽度记在本机浏览器里，优先于 <code>config.json</code> 的 <code>reading.maxWidth</code>；
+      上限是两侧栏之间当下还剩多少，窗口缩小或另一栏展开时会跟着收。</p>
+    <h3 class="help-h">全文搜索</h3>
+    <p class="help-p">顶栏放大镜展开搜索条，回车在所有文档的正文里查找，结果按文档分组列出，点击跳转并高亮命中处。</p>
+    <h3 class="help-h">两种打开方式</h3>
+    <p class="help-p">双击 <code>md-viewer.html</code> 是离线单文件（文档正文已内置，不联网）；
+      <code>node build-docs.mjs --serve</code> 打开 <code>index.html</code> 是实时模式，改文档刷新即生效。</p>
+  </div>
+  <div class="dlg-foot"><button class="btn" type="button" data-close>关闭</button></div>
+</dialog>
+
+<!-- ==================================================================
      页面配置：对应工程根目录下 config.json 的内容。
      由 build-docs.mjs 写入，不要手工编辑这里的 JSON —— 请改 config.json。
      改完在 file:// 下重跑一次构建生效；http 实时模式下刷新页面即可生效。
      ================================================================== -->
 <script id="viewer-config" type="application/json"></script>
+
+<!-- ==================================================================
+     版本信息：工程根目录下 VERSION 那一行（package.json 的 version + 提交标记）拆出来的。
+     由 build-docs.mjs 写入，不要手工编辑；VERSION 由 pre-commit 钩子在每次提交时刷新，
+     所以改完版本要重跑一次构建，产物里的「关于」才会跟着变（--check 会指出这点）。
+     ================================================================== -->
+<script id="build-info" type="application/json"></script>
 
 <!-- ==================================================================
      文档数据快照。两个产物在这里分道扬镳：

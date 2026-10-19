@@ -83,7 +83,7 @@ for (const rel of refs) {
 /* 5. 与模板同源：把两侧的占位块内容抹掉后应当完全一致 */
 const strip = (text) => text
   .replace(/<script id="(vendor-d3|vendor-markmap-lib|vendor-markmap-view|vendor-mermaid)"[^>]*>[\s\S]*?<\/script>/g, '<X>')
-  .replace(/<script id="(viewer-config|docs-snapshot)"([^>]*)>[\s\S]*?<\/script>/g, '<X>');
+  .replace(/<script id="(viewer-config|docs-snapshot|build-info)"([^>]*)>[\s\S]*?<\/script>/g, '<X>');
 check(strip(html) === strip(tpl), '外壳与 page.template.html 完全一致（只有占位块内容不同）');
 
 console.log(fail ? `\n===== 失败 ${fail} 项 =====` : '\n===== 全部通过 =====');

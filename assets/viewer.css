@@ -62,6 +62,30 @@ kbd{font-family:var(--font-mono); font-size:.8em; border:1px solid var(--border)
 }
 .topbar .brand:hover .logo{transform:rotate(-8deg) scale(1.08); box-shadow:0 2px 8px var(--accent-glow)}
 .topbar .brand .bs{color:var(--fg-muted); font-weight:400}
+/* 品牌区是一枚按钮：点开顶栏的下拉菜单（帮助 / 关于…） */
+.topbar .brand{
+  font-weight:700; font-size:15px; white-space:nowrap; display:flex; align-items:center; gap:7px;
+  height:32px; padding:0 9px; border:1px solid transparent; border-radius:6px; color:var(--fg);
+  transition:border-color .16s var(--ease), background-color .18s var(--ease), box-shadow .2s var(--ease);
+}
+.topbar .brand:hover{background:var(--bg-soft); border-color:var(--border)}
+.topbar .brand:active{background:var(--accent-soft)}
+.topbar .brand:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.topbar .brand[aria-expanded="true"]{background:var(--accent-soft); border-color:var(--accent); color:var(--accent)}
+.brand-wrap{position:relative; flex:0 0 auto}
+/* ============ 顶栏下拉菜单（品牌区点开） ============ */
+.menu{
+  position:absolute; top:calc(100% + 7px); left:0; min-width:132px; z-index:45;
+  padding:4px; background:var(--bg-elev); border:1px solid var(--border);
+  border-radius:var(--radius); box-shadow:var(--shadow-md);
+}
+.menu-item{
+  display:block; width:100%; text-align:left; padding:6px 10px;
+  font-size:13.5px; color:var(--fg); border-radius:5px;
+  transition:background-color .16s var(--ease), color .16s var(--ease);
+}
+.menu-item:hover{background:var(--bg-soft); text-decoration:none}
+.menu-item:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
 .topbar .grow{flex:1; min-width:0}
 .topbar .path{
   font-family:var(--font-mono); font-size:12.5px; color:var(--fg-muted);
@@ -257,20 +281,22 @@ html[data-theme="dark"] .sidebar-foot .warn{color:#ff7b72}
 /* ============ 正文 ============ */
 .article{width:100%; max-width:var(--content-w); padding:26px 40px 90px; min-width:0}
 /* ============ 正文宽度感应条（拖边缘对称加宽，见 md-app.js） ============ */
-/* 条子从边缘向内长 14px，落在正文自己的左右留白里：往外长会盖住侧栏的滚动条 */
+/* 条子从边缘向内长 21px，落在正文自己的左右留白里：往外长会盖住侧栏的滚动条。
+   亮线居于命中区正中，鼠标压在亮线上就等于压在把手上。 */
 .w-edge{
-  position:absolute; top:0; bottom:0; width:14px; z-index:6;
+  position:absolute; top:0; bottom:0; width:21px; z-index:6;
   cursor:col-resize; touch-action:none;
 }
 .w-edge.l{left:max(0px, calc(50% - var(--content-w)/2))}
 .w-edge.r{right:max(0px, calc(50% - var(--content-w)/2))}
 .w-edge::before{
-  content:""; position:absolute; top:0; bottom:0; width:2px;
+  content:""; position:absolute; top:0; bottom:0; width:2px; left:50%;
+  transform:translateX(-50%);
   background:var(--accent); opacity:0; transition:opacity .16s var(--ease);
 }
-.w-edge.l::before{left:0}
-.w-edge.r::before{right:0}
+/* 拖动时两侧一起亮：两条线之间的间距就是当下正文宽度，手里那侧（.w-holding）更实 */
 .w-edge:hover::before,body.w-dragging .w-edge::before{opacity:.5}
+body.w-dragging .w-edge.w-holding::before{opacity:.85}
 /* 拖动时指针跑得比得上边缘那么快，光标得靠 body 维持，不能指望条子本身 */
 body.w-dragging{cursor:col-resize; user-select:none}
 .article h1,.article h2,.article h3,.article h4,.article h5,.article h6{
@@ -574,6 +600,57 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
 /* ============ 窄屏遮罩 ============ */
 #scrim{display:none; position:fixed; inset:52px 0 0; background:rgba(0,0,0,.4); z-index:30}
 
+/* ============ 模态对话框（关于 / 帮助，由顶栏品牌菜单打开） ============ */
+/* 原生 <dialog>：showModal() 自带焦点陷阱与 Esc 关闭，层叠由浏览器放在所有元素之上，
+   所以不需要跟顶栏(40)、菜单(45)、侧栏(35)、遮罩(30) 抢 z-index。 */
+.dlg{
+  width:min(560px, calc(100vw - 32px)); max-height:min(74vh, 620px); margin:auto; padding:0;
+  display:flex; flex-direction:column;
+  color:var(--fg); background:var(--bg-elev);
+  border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-md);
+}
+.dlg::backdrop{background:rgba(0,0,0,.4)}
+.dlg[open]{animation:dlg-in .2s var(--ease-out)}
+@keyframes dlg-in{from{opacity:0; transform:translateY(8px) scale(.99)}to{opacity:1; transform:none}}
+.dlg-h{
+  display:flex; align-items:center; gap:8px; flex:0 0 auto;
+  padding:9px 9px 9px 16px; background:var(--bg-soft);
+  border-bottom:1px solid var(--border-soft); border-radius:var(--radius) var(--radius) 0 0;
+}
+.dlg-t{font-size:13px; font-weight:700; letter-spacing:.06em; color:var(--fg-muted)}
+.dlg-x{
+  display:inline-flex; align-items:center; justify-content:center; margin-left:auto;
+  width:24px; height:24px; border-radius:6px; flex:0 0 auto;
+  color:var(--fg-muted); font-size:13px; line-height:1;
+  transition:background-color .16s var(--ease), color .16s var(--ease), transform .24s var(--ease);
+}
+.dlg-x:hover{background:var(--bg-elev); color:var(--accent); text-decoration:none; transform:rotate(90deg)}
+.dlg-x:active{transform:rotate(90deg) scale(.88)}
+.dlg-x:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.dlg-body{flex:1 1 auto; min-height:0; overflow:auto; padding:16px 18px 18px; font-size:14.5px; line-height:1.75}
+.dlg-foot{
+  display:flex; align-items:center; justify-content:flex-end; gap:8px; flex:0 0 auto;
+  padding:9px 14px; border-top:1px solid var(--border-soft); background:var(--bg-soft);
+  border-radius:0 0 var(--radius) var(--radius);
+}
+/* 关于 */
+.about-name{font-size:17px; font-weight:700; margin-bottom:10px}
+.about-list{display:grid; grid-template-columns:auto 1fr; gap:4px 14px; margin:0; font-size:14px}
+.about-list dt{color:var(--fg-muted); text-align:right}
+.about-list dd{margin:0; font-family:var(--font-mono); font-size:13.5px; word-break:break-all}
+.about-note{margin:12px 0 0; font-size:12.5px; line-height:1.7; color:var(--fg-muted)}
+/* 帮助 */
+.help-h{margin:16px 0 4px; font-size:13px; font-weight:700; letter-spacing:.04em; color:var(--fg-muted)}
+.help-h:first-child{margin-top:0}
+.help-p{margin:0; font-size:14px; line-height:1.8}
+.help-p code,.about-note code{
+  font-family:var(--font-mono); font-size:.86em; padding:.05em .3em;
+  background:var(--code-bg); border:1px solid var(--border-soft); border-radius:4px;
+}
+.help-keys{display:grid; grid-template-columns:auto 1fr; gap:5px 14px; margin:0; font-size:14px}
+.help-keys dt{text-align:right; white-space:nowrap}
+.help-keys dd{margin:0; color:var(--fg-muted); font-size:13.5px; line-height:1.7}
+
 @media (max-width:1240px){
   :root{--left-w:252px; --right-w:220px}
 }
@@ -640,7 +717,7 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
 @media print{
   :root{--bg:#fff; --bg-soft:#fff; --bg-elev:#fff; --fg:#000; --fg-muted:#444;
         --border:#bbb; --border-soft:#ddd; --code-bg:#f7f7f7; --quote-bg:#fafafa; --shadow:none}
-  .topbar,.searchbar,.sidebar,.toc,#scrim,.w-edge,.anchor,.meta .no-print,.intro .anchor{display:none !important}
+  .topbar,.searchbar,.sidebar,.toc,#scrim,.w-edge,.menu,.dlg,.anchor,.meta .no-print,.intro .anchor{display:none !important}
   .layout{display:block}
   main{display:block}
   body.search-open main{padding-top:0}
