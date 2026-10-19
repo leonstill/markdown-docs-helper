@@ -1935,7 +1935,9 @@
   }
 
   /* ---------- 路由 ---------- */
-  function route() {    var h = parseHash();
+  function route() {
+    var h = parseHash();
+    syncBarWithEntry();               // 开合跟着历史条目走，分支里不再改它
     if (h.p && state.byPath[h.p]) {
       returnLeftPane();
       var jump = h.q ? { q: h.q, occ: Number(h.k) || 0 } : null;
@@ -1943,7 +1945,7 @@
       if (isMindmapDoc(state.byPath[h.p])) renderMindmapDoc(state.byPath[h.p]);
       else renderDoc(h.p, h.h || null, jump);
     } else if (h.s !== undefined) {
-      fillSearchBar(h.s, true);
+      fillSearchBar(h.s);
       renderSearchPage(h.s);
     } else {
       returnLeftPane();
@@ -1958,17 +1960,26 @@
   $('printBtn').onclick = function () { window.print(); };
   /* ---------- 顶栏搜索条 ---------- */
   function searchBarOpen() { return document.body.classList.contains('search-open'); }
+  /* 开合是「这一条历史记录」的状态，不是全局开关：记在 history.state 里，
+     前进 / 后退回到哪一条就还原成那条当初的样子。 */
+  function recordBar(open) {
+    try { history.replaceState({ sb: open ? 1 : 0 }, ''); }
+    catch (e) { }                     // 写不了的宿主（沙箱内嵌等）只是还原不了，跳转照常
+  }
   function setSearchBar(open, focus) {
     document.body.classList.toggle('search-open', !!open);
     $('searchBtn').setAttribute('aria-expanded', String(!!open));
     if (open) {
       if (focus !== false) { $('topSearch').focus(); $('topSearch').select(); }
     } else $('topSearch').blur();
+    recordBar(open);
   }
-  function fillSearchBar(q, collapse) {      // 从地址栏回填：不抢焦点，默认展开、传 collapse 则收起
+  function syncBarWithEntry() {       // route() 开头调用
+    if (history.state && typeof history.state.sb === 'number') setSearchBar(!!history.state.sb, false);
+    else recordBar(searchBarOpen());  // 点链接 / 改 hash 开出来的新条目：沿用屏上现状并补记
+  }
+  function fillSearchBar(q) {         // 从地址栏回填输入内容，不动开合
     $('topSearch').value = String(q || '');
-    if (collapse) setSearchBar(false);
-    else if (String(q || '')) setSearchBar(true, false);
   }
   $('searchBtn').onclick = function () { setSearchBar(!searchBarOpen()); };
   $('searchBar').onsubmit = function (e) {
