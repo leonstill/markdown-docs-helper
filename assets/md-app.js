@@ -252,7 +252,7 @@
   }
   function applyConfig() {
     var c = state.cfg;
-    document.documentElement.style.setProperty('--content-w', (Number(c.reading && c.reading.maxWidth) || 920) + 'px');
+    cwApply();
     $('brandTitle').textContent = c.title || '';
     $('brandSub').textContent = c.subtitle || '';
     $('sidebarTitle').textContent = c.sidebar.title || '';
@@ -313,6 +313,78 @@
   }
   function togglePane(which) {
     setPane(which, which === 'left' ? !state.leftOpen : !state.rightOpen);
+  }
+
+  /* ---------- 正文宽度：抓正文左右边缘的感应条，向哪边拖都对称变宽变窄 ---------- */
+  var W_MIN = 560;            // 再窄正文就要开始一行折两行了
+  var cwUser = null;          // 用户拖出来的宽度；null = 跟 config.reading.maxWidth
+  function cwDefault() { return Number(state.cfg.reading && state.cfg.reading.maxWidth) || 920; }
+  function cwMain() { return document.querySelector('main'); }
+  /* 上限不给固定数字，就是两侧栏之间当下剩多少：窗口缩放、侧栏开合都自动跟着收 */
+  function cwClamp(w) {
+    var max = cwMain().clientWidth || cwDefault();
+    return Math.max(Math.min(W_MIN, max), Math.min(w, max));
+  }
+  function cwGet() { return cwClamp(cwUser === null ? cwDefault() : cwUser); }
+  function cwApply() {
+    document.documentElement.style.setProperty('--content-w', cwGet() + 'px');
+  }
+  function cwSave() {
+    try {
+      if (cwUser === null) localStorage.removeItem('mdv-content-w');
+      else localStorage.setItem('mdv-content-w', String(Math.round(cwUser)));
+    } catch (e) {}
+  }
+  function cwLoad() {
+    try {
+      var n = Number(localStorage.getItem('mdv-content-w'));
+      cwUser = n >= W_MIN ? n : null;   // 没存过（NaN / 0）就回到 config 值
+    } catch (e) {}
+  }
+  /* 中线两侧到中心的距离相等，所以「宽度 = 指针到中线距离 × 2」天然对称；
+     感应条有 14px 宽，按下时指针未必正压在边缘上，先记下这段偏差再补回来。 */
+  function cwFromPointer(x, grab) {
+    var r = cwMain().getBoundingClientRect();
+    return 2 * Math.abs(x - (r.left + r.width / 2)) + grab;
+  }
+  function initWidthEdges() {
+    var main = cwMain();
+    cwApply();                    // 侧栏开合已定，先按当下可用宽度裁一次，不等 RO 首回调
+    [].forEach.call(main.querySelectorAll('.w-edge'), function (el) {
+      var dragging = false, startW = 0, grab = 0;
+      el.addEventListener('pointerdown', function (e) {
+        if (e.button !== 0) return;
+        dragging = true;
+        startW = cwGet();
+        grab = startW - cwFromPointer(e.clientX, 0);
+        el.setPointerCapture(e.pointerId);
+        document.body.classList.add('w-dragging');
+        e.preventDefault();               // 顺带掐掉拖动路上选中正文文字
+      });
+      el.addEventListener('pointermove', function (e) {
+        if (!dragging) return;
+        cwUser = cwClamp(cwFromPointer(e.clientX, grab));   // 拖不动的就是上限，存也存裁过的
+        cwApply();                        // 实时跟手：正文是居中块，改一个变量就够
+      });
+      function stop(e) {
+        if (!dragging) return;
+        dragging = false;
+        try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+        document.body.classList.remove('w-dragging');
+        cwSave();                         // 只在松手时落盘，拖一行代码存一次没必要
+      }
+      el.addEventListener('pointerup', stop);
+      el.addEventListener('pointercancel', stop);
+      el.addEventListener('dblclick', function () {
+        cwUser = null; cwApply(); cwSave();   // 双击 = 回到 config 里那个默认宽度
+      });
+    });
+    /* main 的宽度只由两侧栏决定，跟正文宽窄无关，所以观察它不会来回打架 */
+    if (window.ResizeObserver) {
+      new ResizeObserver(function () { cwApply(); }).observe(main);
+    } else {
+      window.addEventListener('resize', cwApply);
+    }
   }
 
   /* ---------- 动效 ---------- */
@@ -2187,8 +2259,10 @@
   /* ---------- 启动 ---------- */
   (async function main() {
     await loadConfig();
+    cwLoad();
     applyConfig();
     loadLayout();
+    initWidthEdges();
     enableMotion();
     state.docs = await loadDocs();
     indexDocs(state.docs);

@@ -159,7 +159,7 @@ body.right-hidden .toc{
              background-color .24s linear, border-color .24s linear,
              visibility 0s linear var(--dur);
 }
-main{flex:1 1 auto; min-width:0; display:flex; justify-content:center;
+main{flex:1 1 auto; min-width:0; display:flex; justify-content:center; position:relative;
   transition:padding-top var(--dur) var(--ease)}
 
 /* 侧栏标题行 + 右上角关闭按钮 */
@@ -256,6 +256,23 @@ html[data-theme="dark"] .sidebar-foot .warn{color:#ff7b72}
 
 /* ============ 正文 ============ */
 .article{width:100%; max-width:var(--content-w); padding:26px 40px 90px; min-width:0}
+/* ============ 正文宽度感应条（拖边缘对称加宽，见 md-app.js） ============ */
+/* 条子从边缘向内长 14px，落在正文自己的左右留白里：往外长会盖住侧栏的滚动条 */
+.w-edge{
+  position:absolute; top:0; bottom:0; width:14px; z-index:6;
+  cursor:col-resize; touch-action:none;
+}
+.w-edge.l{left:max(0px, calc(50% - var(--content-w)/2))}
+.w-edge.r{right:max(0px, calc(50% - var(--content-w)/2))}
+.w-edge::before{
+  content:""; position:absolute; top:0; bottom:0; width:2px;
+  background:var(--accent); opacity:0; transition:opacity .16s var(--ease);
+}
+.w-edge.l::before{left:0}
+.w-edge.r::before{right:0}
+.w-edge:hover::before,body.w-dragging .w-edge::before{opacity:.5}
+/* 拖动时指针跑得比得上边缘那么快，光标得靠 body 维持，不能指望条子本身 */
+body.w-dragging{cursor:col-resize; user-select:none}
 .article h1,.article h2,.article h3,.article h4,.article h5,.article h6{
   line-height:1.4; margin:1.6em 0 .6em; scroll-margin-top:70px; font-weight:700;
 }
@@ -584,6 +601,8 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
   #scrim{display:block; opacity:0; pointer-events:none; transition:opacity .24s var(--ease)}
   body.side-open #scrim{opacity:1; pointer-events:auto}
   .article{padding:18px 18px 70px}
+  /* 窄屏正文已经贴到屏幕边，没有「向外拖」的余地，感应条收起 */
+  .w-edge{display:none}
   .topbar .brand .bs{display:none}
   .topbar .path{display:none}
   .topbar .btn.icon{padding:0 5px}
@@ -621,7 +640,7 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
 @media print{
   :root{--bg:#fff; --bg-soft:#fff; --bg-elev:#fff; --fg:#000; --fg-muted:#444;
         --border:#bbb; --border-soft:#ddd; --code-bg:#f7f7f7; --quote-bg:#fafafa; --shadow:none}
-  .topbar,.searchbar,.sidebar,.toc,#scrim,.anchor,.meta .no-print,.intro .anchor{display:none !important}
+  .topbar,.searchbar,.sidebar,.toc,#scrim,.w-edge,.anchor,.meta .no-print,.intro .anchor{display:none !important}
   .layout{display:block}
   main{display:block}
   body.search-open main{padding-top:0}
