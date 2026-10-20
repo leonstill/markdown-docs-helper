@@ -90,6 +90,11 @@
 
 <div id="scrim"></div>
 
+<!-- 向下滚了一段才浮现的「回到顶部」：圆钮贴在正文右下角，浮现状态是按钮自身的 .on -->
+<button class="to-top" id="toTop" type="button" title="回到顶部" aria-label="回到顶部">
+  <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true"><path d="M8 12.6V4.2M3.9 8.3 8 4.2l4.1 4.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</button>
+
 <!-- ==================================================================
      顶栏品牌菜单弹出的两个模态框（原生 <dialog>，showModal 自带焦点陷阱与 Esc 关闭）。
      关于框里的版本 / 提交标记由下面的 build-info 注入块填，见 md-app.js 的 showAbout()。
@@ -119,7 +124,8 @@
   <div class="dlg-body">
     <h3 class="help-h">三栏与工具栏</h3>
     <p class="help-p">左栏是文档目录（<kbd>[</kbd>），右栏是本篇大纲（<kbd>]</kbd>）。顶栏从左到右：
-      左栏开关、本菜单、上一篇 / 下一篇、全文搜索、打印或导出 PDF、复制当前文档链接、深浅色切换、右栏开关。</p>
+      左栏开关、本菜单、上一篇 / 下一篇、全文搜索、打印或导出 PDF、复制当前文档链接、深浅色切换、右栏开关。
+      向下滚过一段后，正文右下角会浮出圆形 ↑ 按钮，点一下滚回顶部。</p>
     <h3 class="help-h">快捷键</h3>
     <dl class="help-keys">
       <dt><kbd>[</kbd> / <kbd>]</kbd></dt><dd>收起 / 展开左侧目录栏、右侧大纲栏</dd>

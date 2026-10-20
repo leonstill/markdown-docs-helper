@@ -600,6 +600,30 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
 /* ============ 窄屏遮罩 ============ */
 #scrim{display:none; position:fixed; inset:52px 0 0; background:rgba(0,0,0,.4); z-index:30}
 
+/* ============ 回到顶部（向下滚过阈值才浮现的圆形浮动按钮） ============ */
+/* 贴在「正文那一栏」的右下角：右栏开着时让开它的宽度，收起后自己补到屏幕边。
+   关着时用 visibility 而不是只藏透明度，否则 Tab 会走到一个看不见的按钮上。 */
+.to-top{
+  position:fixed; right:calc(var(--right-w) + 22px); bottom:26px; z-index:36;
+  width:40px; height:40px; padding:0; border-radius:50%;
+  display:inline-flex; align-items:center; justify-content:center;
+  color:var(--fg-muted); background:var(--bg-elev);
+  border:1px solid var(--border); box-shadow:var(--shadow-md);
+  opacity:0; visibility:hidden; transform:translateY(10px) scale(.92); pointer-events:none;
+  transition:opacity .22s var(--ease), transform .26s var(--ease-out), visibility 0s linear .26s,
+             background-color .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease);
+}
+.to-top.on{
+  opacity:1; visibility:visible; transform:none; pointer-events:auto;
+  transition:opacity .22s var(--ease), transform .26s var(--ease-out), visibility 0s linear,
+             background-color .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease);
+}
+.to-top:hover{color:var(--accent); border-color:var(--accent); background:var(--accent-soft)}
+.to-top:active{transform:scale(.9)}
+.to-top:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.to-top svg{display:block}
+body.right-hidden .to-top{right:22px}
+
 /* ============ 模态对话框（关于 / 帮助，由顶栏品牌菜单打开） ============ */
 /* 原生 <dialog>：showModal() 自带焦点陷阱与 Esc 关闭，层叠由浏览器放在所有元素之上，
    所以不需要跟顶栏(40)、菜单(45)、侧栏(35)、遮罩(30) 抢 z-index。 */
@@ -609,6 +633,9 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
   color:var(--fg); background:var(--bg-elev);
   border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-md);
 }
+/* 收起时靠 UA 的 dialog:not([open]){display:none} 隐藏，但上面那条 display:flex 是作者样式，
+   优先级压过 UA —— 不补这条，两个框会一直摊在 body 末尾跟着页面滚。 */
+.dlg:not([open]){display:none}
 .dlg::backdrop{background:rgba(0,0,0,.4)}
 .dlg[open]{animation:dlg-in .2s var(--ease-out)}
 @keyframes dlg-in{from{opacity:0; transform:translateY(8px) scale(.99)}to{opacity:1; transform:none}}
@@ -678,6 +705,10 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
   #scrim{display:block; opacity:0; pointer-events:none; transition:opacity .24s var(--ease)}
   body.side-open #scrim{opacity:1; pointer-events:auto}
   .article{padding:18px 18px 70px}
+  /* 窄屏两侧都是抽屉，按钮直接贴屏幕边；抽屉正开着时别压在它上面 */
+  .to-top{right:20px; bottom:20px}
+  body.right-hidden .to-top{right:20px}
+  body.side-open .to-top,body.side-open .to-top.on{opacity:0; visibility:hidden; pointer-events:none}
   /* 窄屏正文已经贴到屏幕边，没有「向外拖」的余地，感应条收起 */
   .w-edge{display:none}
   .topbar .brand .bs{display:none}
@@ -717,7 +748,7 @@ html.mg-full-on,html.mg-full-on body{overflow:hidden}
 @media print{
   :root{--bg:#fff; --bg-soft:#fff; --bg-elev:#fff; --fg:#000; --fg-muted:#444;
         --border:#bbb; --border-soft:#ddd; --code-bg:#f7f7f7; --quote-bg:#fafafa; --shadow:none}
-  .topbar,.searchbar,.sidebar,.toc,#scrim,.w-edge,.menu,.dlg,.anchor,.meta .no-print,.intro .anchor{display:none !important}
+  .topbar,.searchbar,.sidebar,.toc,#scrim,.w-edge,.menu,.dlg,.to-top,.anchor,.meta .no-print,.intro .anchor{display:none !important}
   .layout{display:block}
   main{display:block}
   body.search-open main{padding-top:0}

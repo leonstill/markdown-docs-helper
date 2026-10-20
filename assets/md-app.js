@@ -2158,6 +2158,20 @@
   $('closeLeft').onclick = function () { setPane('left', false); };
   $('closeRight').onclick = function () { setPane('right', false); };
   $('scrim').onclick = function () { setPane('left', false); setPane('right', false); };
+
+  /* ---------- 回到顶部：滚过阈值才浮现的浮动圆钮 ---------- */
+  /* 阈值取小半屏，短文档（一屏多点）滚到底也该出现；
+     换文档时各处都会 scrollTo(0,0)，滚动事件会把按钮收回去。 */
+  var toTopBtn = $('toTop');
+  function syncToTop() {
+    toTopBtn.classList.toggle('on', window.scrollY > Math.max(280, innerHeight * 0.35));
+  }
+  window.addEventListener('scroll', syncToTop, { passive: true });
+  toTopBtn.onclick = function () {
+    var calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({ top: 0, behavior: calm ? 'auto' : 'smooth' });
+  };
+  syncToTop();
   $('prevBtn').onclick = function () { step(-1); };
   $('nextBtn').onclick = function () { step(1); };
   function step(d) {
