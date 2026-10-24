@@ -1,6 +1,6 @@
 {
   "name": "markdown-docs-helper",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "private": true,
   "description": "零依赖的 Markdown 文档浏览器：双击即可离线阅读，或起一个本地实时服务",
   "repository": "https://github.com/user/repo.git",
