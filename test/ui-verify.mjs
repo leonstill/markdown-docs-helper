@@ -164,8 +164,11 @@ class CDP {
   /* 期望值全部从「页面内置配置 + 文档索引」推导：换掉示例文档也不会误报 */
   const htmlText = fs.readFileSync(path.join(ROOT, 'md-viewer.html'), 'utf8');
   const embeddedCfg = JSON.parse(/<script id="viewer-config" type="application\/json">([\s\S]*?)<\/script>/.exec(htmlText)[1]);
-  const indexDocs = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs-index.json'), 'utf8')).docs;
+  const indexJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs-index.json'), 'utf8'));
+  const indexDocs = indexJson.docs;
   const normDir = (p) => String(p).replace(/\/+$/, '');
+  /* 页面展示去掉 docs/ 虚拟前缀：顶层归「根目录」 */
+  const dispDir = (dir) => (dir === 'docs' ? '.' : dir.replace(/^docs\//, ''));
   function expectedVisible(cfg) {
     let docs = indexDocs.slice();
     const ex = cfg.sidebar.exclude || [];
@@ -186,7 +189,8 @@ class CDP {
   }))];
   const expDirLabels = expDirs.map((dir) => {
     const f = (embeddedCfg.sidebar.folders || []).find((x) => normDir(typeof x === 'string' ? x : x.dir) === dir);
-    return (f && f.label) || (dir === '.' ? '根目录' : dir);
+    const shown = dir === '.' ? '.' : dispDir(dir);
+    return (f && f.label) || (shown === '.' ? '根目录' : shown);
   });
   const sameSet = (a, b) => a.length === b.length && [...a].sort().join('|') === [...b].sort().join('|');
 
@@ -236,7 +240,8 @@ class CDP {
     check('副标题来自 config.json', p.sub === (embeddedCfg.subtitle || ''), p.sub);
     check('左栏标题来自 config.json', p.sidebarTitle === embeddedCfg.sidebar.title, p.sidebarTitle);
     check('首页标题来自 config.json', p.homeHeading === embeddedCfg.home.title, p.homeHeading);
-    check('首页 intro 渲染为 Markdown', p.introLen > 50, 'len=' + p.introLen);
+    check('首页 intro 与 config.json 一致', (p.introLen > 0) === !!String(embeddedCfg.home.intro || '').trim(),
+      'len=' + p.introLen);
     check('首页卡片数 = 配置决定的可见文档数', p.cards === expDocs.length, 'cards=' + p.cards + ' 期望=' + expDocs.length);
     check('左栏分组名与 config 一致', sameSet(p.dirs, expDirLabels), '实际=' + p.dirs.join('|') + ' 期望=' + expDirLabels.join('|'));
     check('阅读宽度来自 config（' + (embeddedCfg.reading?.maxWidth || 920) + 'px）',
@@ -300,7 +305,7 @@ class CDP {
 
     console.log('\n--- F. 实时模式（http）---');
     p = await open(httpViewer, 1440, 1000);
-    check('实时模式标识（页脚）', /实时读取 docs\//.test(p.foot), p.foot.slice(0, 60));
+    check('实时模式标识（页脚）', p.foot.includes('实时读取 ' + indexJson.docsDir), p.foot.slice(0, 80));
     check('实时模式默认只开右栏', p.leftHidden === true && p.rightHidden === false);
     check('实时模式文档数与索引一致', p.docitems === expectedVisible(embeddedCfg).length, 'items=' + p.docitems);
     check('实时模式无 console 错误', cdp.errors().length === 0, cdp.errors().join('; '));

@@ -220,7 +220,7 @@ const PROBE = `(function(){
     check('SVG 有实际尺寸', !!p.svgBox && p.svgBox.w > 100 && p.svgBox.h > 50, JSON.stringify(p.svgBox));
     check('节点文字是中文而不是 HTML 实体', p.hasEntities === false && /[\u4e00-\u9fa5]/.test(p.firstText),
       'first=' + p.firstText + ' entities=' + p.hasEntities);
-    check('顶栏路径是导图文档', p.docPath === mmDoc.path, p.docPath);
+    check('顶栏路径是导图文档', p.docPath === mmDoc.path.replace(/^docs\//, ''), p.docPath);
     check('统计信息显示了节点数与层数', /节点/.test(p.stats) && /层/.test(p.stats), p.stats);
     check('右栏标题变成「导图大纲」', p.outlineTitle === '导图大纲', p.outlineTitle);
     check('右侧大纲列出条目', p.outlineItems > 3, 'items=' + p.outlineItems);

@@ -11,6 +11,17 @@
   function dirOf(p) { var i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); }
   function baseOf(p) { var i = p.lastIndexOf('/'); return i < 0 ? p : p.slice(i + 1); }
   function normDir(p) { return String(p).replace(/\/+$/, ''); }
+  /* 展示用路径：去掉 docs/ 虚拟前缀（内部路径与 URL 仍带它）。 */
+  function dispPath(p) {
+    var pre = String(state.docsRoot || 'docs/').replace(/\/+$/, '') + '/';
+    return p.indexOf(pre) === 0 ? p.slice(pre.length) : p;
+  }
+  /* 展示用目录：虚拟根自身就是顶层，归「根目录」 */
+  function dispDir(dir) {
+    var root = String(state.docsRoot || 'docs/').replace(/\/+$/, '');
+    if (dir === root) return '.';
+    return dispPath(dir) || '.';
+  }
   function byPathZh(a, b) { return a.path.localeCompare(b.path, 'zh-Hans-CN'); }
   var NARROW = 860;
 
@@ -40,6 +51,7 @@
     docs: [], visible: [], byPath: {}, byBase: {},
     cfg: DEFAULTS, cfgError: null, cfgFileLoaded: false,
     mode: 'snapshot', generatedAt: null, skipped: 0,
+    docsRoot: 'docs/', docsDir: '',
     current: null, headings: [],
     leftOpen: false, rightOpen: true,
     /* 思维导图：当前导图、markmap 实例、大纲、折叠集合 */
@@ -419,6 +431,8 @@
   async function loadDocs() {
     var snap = readSnapshot();
     state.skipped = snap.skipped || 0;
+    state.docsRoot = snap.docsRoot || state.docsRoot;
+    state.docsDir = snap.docsDir || '';
     if (/^https?:/.test(location.protocol)) {
       try {
         var res = await fetch('docs-index.json', { cache: 'no-store' });
@@ -435,6 +449,8 @@
           if (docs.length) {
             state.mode = 'live';
             state.generatedAt = idx.generatedAt;
+            state.docsRoot = idx.docsRoot || state.docsRoot;
+            state.docsDir = idx.docsDir || state.docsDir;
             state.skipped = idx.skipped || 0;
             return docs;
           }
@@ -519,7 +535,13 @@
     docs.forEach(function (d) {
       var dir = dirOf(d.path) || '.';
       if (!map[dir]) {
-        map[dir] = { dir: dir, label: labelOf[dir] || (dir === '.' ? '根目录' : dir), docs: [] };
+        /* 分组标题按展示路径写：顶层是根目录，子目录不带 docs/ 前缀 */
+        var shown = dir === '.' ? '.' : dispDir(dir);
+        map[dir] = {
+          dir: dir, shown: shown,
+          label: labelOf[dir] || (shown === '.' ? '根目录' : shown),
+          docs: []
+        };
         groups.push(map[dir]);
       }
       map[dir].docs.push(d);
@@ -528,9 +550,9 @@
       var ra = (a.dir in rankOf) ? rankOf[a.dir] : Infinity;
       var rb = (b.dir in rankOf) ? rankOf[b.dir] : Infinity;
       if (ra !== rb) return ra - rb;
-      if (a.dir === '.') return -1;
-      if (b.dir === '.') return 1;
-      return a.dir.localeCompare(b.dir, 'zh-Hans-CN');
+      if (a.shown === '.') return -1;
+      if (b.shown === '.') return 1;
+      return a.shown.localeCompare(b.shown, 'zh-Hans-CN');
     });
     return groups;   // 组内顺序沿用 applyDocFilter 排好的顺序
   }
@@ -573,7 +595,7 @@
           '" href="' + docHref(r.doc.path) + '">' +
           '<span class="t">' + esc(r.doc.title) +
           (r.count ? ' <span class="hit">' + r.count + ' 处</span>' : '') + '</span>' +
-          '<span class="s">' + esc(r.snippet || r.doc.path) + '</span></a>';
+          '<span class="s">' + esc(r.snippet || dispPath(r.doc.path)) + '</span></a>';
       });
       tree.innerHTML = h;
       return;
@@ -586,7 +608,7 @@
       g.docs.forEach(function (d) {
         var active = state.current && state.current.path === d.path;
         html += '<a class="docitem' + (active ? ' active' : '') + '" href="' + docHref(d.path) +
-          '" title="' + esc(d.path) + '">' +
+          '" title="' + esc(dispPath(d.path)) + '">' +
           '<span class="t">' + esc(d.title) +
           (isMindmapDoc(d) ? ' <span class="chip-mm" title="' + esc(docKindLabel(d)) + '">' + esc(docKindLabel(d)) + '</span>' : '') + '</span>' +
           '<span class="s">' + esc(baseOf(d.path)) + '</span></a>';
@@ -603,7 +625,7 @@
       (shown !== total ? ' · 当前显示 <strong>' + shown + '</strong> 篇' : '') +
       ' · 约 ' + (chars / 10000).toFixed(1) + ' 万字' +
       (state.skipped ? ' · 忽略 ' + state.skipped + ' 个非 md 文件' : ''));
-    lines.push('数据来源：' + (state.mode === 'live' ? '实时读取 docs/'
+    lines.push('数据来源：' + (state.mode === 'live' ? '实时读取 ' + esc(state.docsDir || 'docs/')
       : '离线快照' + (state.generatedAt ? '（' + new Date(state.generatedAt).toLocaleString('zh-CN') + '）' : '')));
     lines.push('显示内容由 <code>config.json</code> 管理');
     lines.push('快捷键：<kbd>[/]</kbd> 左右栏 · <kbd>/</kbd> 搜索 · <kbd>Esc</kbd> 清除 · <kbd>Ctrl</kbd>+<kbd>P</kbd> 打印');
@@ -719,7 +741,7 @@
       res.groups.forEach(function (g, gi) {
         html += '<section class="sr-group" id="sr-g-' + gi + '"><div class="sr-head">' +
           '<a class="sr-t" href="' + docHref(g.doc.path) + '">' + esc(g.doc.title) + '</a>' +
-          '<span class="sr-p">' + esc(g.doc.path) + '</span>' +
+          '<span class="sr-p">' + esc(dispPath(g.doc.path)) + '</span>' +
           (g.graphic ? '<span class="sr-graph" title="整篇画成图，点开只能打开文档，定位不到命中处">图形文档 · 不定位</span>' : '') +
           '<span class="sr-n">' + g.all + ' 处</span></div>';
         g.hits.forEach(function (h) {
@@ -760,7 +782,7 @@
       res.groups.forEach(function (g, gi) {
         h += '<button type="button" class="docitem sr-nav" data-g="sr-g-' + gi + '">' +
           '<span class="t">' + esc(g.doc.title) + ' <span class="hit">' + g.all + ' 处</span></span>' +
-          '<span class="s">' + esc(g.doc.path) + '</span></button>';
+          '<span class="s">' + esc(dispPath(g.doc.path)) + '</span></button>';
       });
       tree.innerHTML = h;
       borrowLeftPane();          // 有东西可导航才把左栏借出来
@@ -866,7 +888,7 @@
     html += '<div class="meta">' +
       '<span>共 ' + total + ' 篇 Markdown 文档</span>' +
       (shown !== total ? '<span>当前显示 ' + shown + ' 篇（由 config.json 控制）</span>' : '') +
-      '<span>' + (state.mode === 'live' ? '实时读取 docs/' : '离线快照模式') + '</span>' +
+      '<span>' + (state.mode === 'live' ? '实时读取 ' + esc(state.docsDir || 'docs/') : '离线快照模式') + '</span>' +
       '<span class="no-print">点击卡片开始阅读</span></div>';
     if (state.cfgError) html += '<div class="notice">⚠ ' + esc(state.cfgError) + '</div>';
     if (h.intro) {
@@ -879,7 +901,7 @@
         g.docs.forEach(function (d) {
           html += '<a class="card" href="' + docHref(d.path) + '">' +
             '<div class="ct">' + esc(d.title) + '</div>' +
-            '<div class="cp">' + esc(d.path) + '</div>' +
+            '<div class="cp">' + esc(dispPath(d.path)) + '</div>' +
             '<div class="cs">' + esc(summaryOf(d)) + '</div>' +
             '<div class="cc">' + (d.size ? (d.size / 1024).toFixed(1) + ' KB · ' : '') +
             '约 ' + String(d.text || '').length + ' 字</div></a>';
@@ -920,9 +942,9 @@
       '<div class="meta"><span>' + (doc.size ? (doc.size / 1024).toFixed(1) + ' KB' : '') + '</span>' +
       '<span>约 ' + chars + ' 字</span>' +
       '<span>' + out.headings.length + ' 个标题</span>' +
-      '<span class="no-print">' + esc(doc.path) + '</span></div>' +
+      '<span class="no-print">' + esc(dispPath(doc.path)) + '</span></div>' +
       docRefsHtml(refs) + out.html;
-    $('docPath').textContent = doc.path;
+    $('docPath').textContent = dispPath(doc.path);
     popArticle();
     document.title = doc.title + (state.cfg.subtitle ? ' ' + state.cfg.subtitle : '');
     mountMermaid();                      // 正文里的 ```mermaid 围栏在这里画成图
@@ -1548,9 +1570,9 @@
       '<div class="meta"><span>' + (doc.size ? (doc.size / 1024).toFixed(1) + ' KB' : '') + '</span>' +
       '<span>约 ' + chars + ' 字</span>' +
       '<span>思维导图</span>' +
-      '<span class="no-print">' + esc(doc.path) + '</span></div>' +
+      '<span class="no-print">' + esc(dispPath(doc.path)) + '</span></div>' +
       mindmapHtml(doc);
-    $('docPath').textContent = doc.path;
+    $('docPath').textContent = dispPath(doc.path);
     popArticle();
     document.title = doc.title + (state.cfg.subtitle ? ' ' + state.cfg.subtitle : '');
     renderMindmap();
@@ -1586,9 +1608,9 @@
       '<div class="meta"><span>' + (doc.size ? (doc.size / 1024).toFixed(1) + ' KB' : '') + '</span>' +
       '<span>约 ' + chars + ' 字</span>' +
       '<span>' + esc(dk.name) + '</span>' +
-      '<span class="no-print">' + esc(doc.path) + '</span></div>' +
+      '<span class="no-print">' + esc(dispPath(doc.path)) + '</span></div>' +
       '<div class="mg-doc">' + block + '</div>';
-    $('docPath').textContent = doc.path;
+    $('docPath').textContent = dispPath(doc.path);
     popArticle();
     document.title = doc.title + (state.cfg.subtitle ? ' ' + state.cfg.subtitle : '');
     mountMermaid();

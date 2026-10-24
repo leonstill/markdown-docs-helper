@@ -60,12 +60,24 @@ node build-docs.mjs --serve [目录]          # 启动本地实时服务（默�
 node build-docs.mjs --serve --port 9000 [目录]
 node build-docs.mjs --serve --lan [目录]    # 绑定所有网卡（0.0.0.0），同一局域网内可访问
 node build-docs.mjs --serve --host 192.168.1.20 [目录]   # 只绑定指定的本机地址
+node build-docs.mjs --exclude a/b [--exclude xxx] [目录]   # 跳过文档目录下的子目录/单个文件，可写多次
 node build-docs.mjs --help                 # 用法说明
 ```
 
 目录是**位置参数**：写在参数前或参数后都可以，但最多只能写一个，不写就是工程自带的 `./docs`。
 参数写错会直接报错退出，不会被静默忽略——未知参数、多写了一个目录、不存在的目录、
 坏的端口号、坏的监听地址、`--serve` 与 `--check` 混用，都会当场拦下并提示正确写法。
+
+`--exclude` 写的是**相对文档目录**的路径，按路径前缀排除（目录和单个文件都可以），
+对构建、`--check`、`--serve` 三种模式都生效：
+
+```
+node build-docs.mjs --exclude xxx --exclude a/b --serve ./
+# 跳过 ./xxx/、./a/b/ 下的全部文件；./a/ 下其它文件照常扫描
+```
+
+绝对路径、用 `..` 跳出文档目录的写法会被拒绝。注意它与 `config.json` 里 `sidebar.exclude`
+不同：后者只是左栏不显示，文档仍会进索引和搜索；`--exclude` 则是根本不扫描。
 
 ## 监听地址（`--serve` 专用）
 

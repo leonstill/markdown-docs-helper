@@ -11,6 +11,8 @@
  *   · --host 缺值、带端口/URL、非法地址、重复、与 --lan 混用、没配 --serve → 报错
  *   · --lan / --host 的真实绑定行为由 test/serve-host.mjs 验证
  *   · --serve 与 --check 混用 → 报错
+ *   · --exclude 缺值 / 绝对路径 / .. 跳出目录 / 与独立命令混用 → 报错；
+ *     多次 --exclude 真的把目录与单个文件挡在索引外（未被排除的照常收录）
  *   · 位置目录 + --check / 默认构建 / --help → 正常退出码 0，
  *     并核对内置索引里确实出现了那个目录下的文档（证明参数真的生效）
  *
@@ -73,6 +75,14 @@ const TMP_DOCS = path.join(CACHE, 'cli-docs');
 fs.rmSync(TMP_DOCS, { recursive: true, force: true });
 fs.mkdirSync(path.join(TMP_DOCS, '子目录'), { recursive: true });
 fs.writeFileSync(path.join(TMP_DOCS, '子目录', '示例文档.md'), '# 参数验证用的标题\n\n正文。\n', 'utf8');
+/* --exclude 用：要被挡在外面的目录（含深层）、单个文件，以及不该被误伤的邻居 */
+fs.mkdirSync(path.join(TMP_DOCS, 'xxx', '深层'), { recursive: true });
+fs.writeFileSync(path.join(TMP_DOCS, 'xxx', '排除我.md'), '# 不该出现\n', 'utf8');
+fs.writeFileSync(path.join(TMP_DOCS, 'xxx', '深层', '也不该出现.md'), '# 不该出现\n', 'utf8');
+fs.mkdirSync(path.join(TMP_DOCS, 'a', 'b'), { recursive: true });
+fs.writeFileSync(path.join(TMP_DOCS, 'a', 'b', '排除我.md'), '# 不该出现\n', 'utf8');
+fs.writeFileSync(path.join(TMP_DOCS, 'a', '留下来.md'), '# 留下来\n', 'utf8');
+fs.writeFileSync(path.join(TMP_DOCS, '单个文件.md'), '# 单个文件\n', 'utf8');
 
 console.log('\n--- 必须报错（严格检查）---');
 rejects('--docs 已取消，并提示新写法', ['--docs', 'docs'], '--docs 已取消');
@@ -95,10 +105,15 @@ rejects('--lan 没有 --serve 被拒绝', ['--lan'], '--lan 只在 --serve 模�
 rejects('--host 重复被拒绝', ['--serve', '--host', '0.0.0.0', '--host', '127.0.0.1'], '只能选一个');
 rejects('--host 与 --lan 混用被拒绝', ['--serve', '--lan', '--host', '0.0.0.0'], '只能选一个');
 rejects('--serve 与 --check 混用被拒绝', ['--serve', '--check'], '只能选一个');
+rejects('--exclude 缺值被拒绝', ['--exclude'], '--exclude 后面要跟相对文档目录的路径');
+rejects('--exclude 绝对路径被拒绝', ['--exclude', path.join(TMP_DOCS, 'xxx')], '不要写绝对路径');
+rejects('--exclude 用 .. 跳出目录被拒绝', ['--exclude', '../xxx'], '不能用 .. 跳出文档目录');
+rejects('--stamp-version 不接受 --exclude', ['--stamp-version', '--exclude', 'xxx'], '不接受 --exclude');
 
 console.log('\n--- 正确写法 ---');
 accepts('--help 打印用法', ['--help'], 'node build-docs.mjs --serve [目录]');
 accepts('--help 里有局域网共享的说明', ['--help'], '--serve --lan [目录]');
+accepts('--help 里有 --exclude 的说明', ['--help'], '--exclude a/b');
 // 此刻产物是按默认 ./docs 构建的，用外部目录做 --check 应当报过期
 // （如果位置目录被忽略，这里会因为比对的是 ./docs 而误判为最新，用例就会失败）
 rejects('外部目录 + --check 认得出这个目录（过期）', ['--check', TMP_DOCS], '已过期');
@@ -110,6 +125,18 @@ accepts('位置目录 + 构建', [TMP_DOCS], '（命令行指定）');
     '内置索引里出现了外部目录的文档（参数真的生效）', JSON.stringify(idx.docs.map((d) => d.path)));
 }
 accepts('刚构建完，同一个目录 + --check 是最新的', ['--check', TMP_DOCS], '都是最新的');
+accepts('--exclude 多次生效（目录 + 带反斜杠的子目录 + 单个文件）',
+  [TMP_DOCS, '--exclude', 'xxx', '--exclude', 'a\\b', '--exclude', '单个文件.md'],
+  '已刷新文档快照与页面配置');
+{
+  const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs-index.json'), 'utf8'));
+  const paths = idx.docs.map((d) => d.path);
+  check(!paths.some((p) => p.startsWith('docs/xxx/')), 'xxx/ 整个目录被排除（含深层文件）', JSON.stringify(paths));
+  check(!paths.some((p) => p.startsWith('docs/a/b/')), 'a/b/ 子目录被排除（反斜杠写法也认）', JSON.stringify(paths));
+  check(!paths.includes('docs/单个文件.md'), '单个文件也能排除', JSON.stringify(paths));
+  check(paths.includes('docs/a/留下来.md') && paths.includes('docs/子目录/示例文档.md'),
+    '未被排除的同级文档照常收录', JSON.stringify(paths));
+}
 
 console.log('\n--- 收尾：用默认 ./docs 重建产物 ---');
 accepts('默认构建（恢复演示文档）', [], '已刷新文档快照与页面配置');

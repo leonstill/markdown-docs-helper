@@ -31,12 +31,19 @@
  *   node build-docs.mjs --serve --port 9000 [目录]
  *   node build-docs.mjs --serve --lan [目录]   # 绑定所有网卡（0.0.0.0），同一局域网内可访问
  *   node build-docs.mjs --serve --host 192.168.1.20 [目录]   # 只绑定指定的本机地址
+ *   node build-docs.mjs --exclude a/b [--exclude xxx] [目录] # 跳过文档目录下的子目录/单个文件（可写多次）
  *   node build-docs.mjs --stamp-version          # 只刷 VERSION（package.json 的 version+提交短哈希）
  *   node build-docs.mjs --install-hook           # 把 --stamp-version 装成 pre-commit 钩子，提交时自动刷
  *   node build-docs.mjs --help
  *
  * 目录位置随意（写在参数前后都行），但最多只能写一个；不写就是工程自带的 ./docs。
  * 参数写错会直接报错退出，绝不会被静默忽略：未知参数、多余目录、坏的端口号、坏的监听地址都会拦下。
+ *
+ * --exclude（可写多次）：路径相对文档目录，按路径前缀排除，目录与单个文件都可以。
+ *   例如 node build-docs.mjs --exclude xxx --exclude a/b --serve ./
+ *   会跳过 ./xxx/、./a/b/ 下的全部文件（a/ 下其它文件照常扫描）。
+ *   构建、--check、--serve 三种模式都生效；绝对路径和用 .. 跳出文档目录的写法会被拒绝。
+ *   与 config.json 的 sidebar.exclude 不同：后者只是左栏不显示，文档仍会进索引与搜索。
  *
  * 监听地址（--serve 专用）：默认只绑 127.0.0.1，也就是只有本机能打开。
  *   --lan            = --host 0.0.0.0，绑定所有网卡，启动时会把局域网地址印出来；
@@ -88,6 +95,7 @@ const MermaidCore = loadAssetModule('assets/mermaid-core.js');
 const VIRTUAL_ROOT = 'docs';
 const DEFAULT_DOCS_DIR = path.join(ROOT, 'docs');
 let DOCS_DIR = DEFAULT_DOCS_DIR;
+let EXCLUDES = [];              // --exclude 的归一化路径（相对文档目录、posix、无首尾斜杠）
 const VIEWER = path.join(ROOT, 'md-viewer.html');       // 离线单文件版（生成物，随仓库提交）
 const INDEX_HTML = path.join(ROOT, 'index.html');       // 实时服务版（生成物，构建时刷新；--serve 只用内存里的同一份）
 const TEMPLATE = path.join(ROOT, 'page.template.html'); // 两个页面唯一的布局来源
@@ -166,12 +174,42 @@ function assertInsideRoot(target) {
 }
 
 /* ---------- 扫描文档目录（只读） ---------- */
+/* --exclude 写的是相对文档目录的路径：统一成 posix 形式（Windows 的反斜杠也认），
+   去掉 ./ 前缀与尾部斜杠，方便按路径前缀比较。空值、绝对路径、.. 都当场报错。 */
+function normalizeExclude(raw) {
+  const p = String(raw).replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
+  if (!p || p === '.') {
+    cliError('--exclude 后面要跟相对文档目录的路径，例如：--exclude a/b');
+  }
+  if (/^(\/|[A-Za-z]:\/)/.test(p)) {
+    cliError(`--exclude 只接受相对文档目录的路径，不要写绝对路径：${raw}`);
+  }
+  if (p.split('/').includes('..')) {
+    cliError(`--exclude 不能用 .. 跳出文档目录：${raw}`);
+  }
+  return p.split('/').filter(Boolean).join('/');
+}
+
+/* Windows / macOS 的文件系统默认不区分大小写，排除路径也跟着不区分 */
+const EXCLUDE_CASE_INSENSITIVE = process.platform === 'win32' || process.platform === 'darwin';
+const excludeKey = (s) => (EXCLUDE_CASE_INSENSITIVE ? s.toLowerCase() : s);
+
+/* 命中规则：路径相同，或位于被排除目录之下（按路径分段比较，a/b 不会误伤 a/bc） */
+function isExcluded(rel) {
+  const key = excludeKey(rel);
+  return EXCLUDES.some((ex) => {
+    const k = excludeKey(ex);
+    return key === k || key.startsWith(k + '/');
+  });
+}
+
 async function walk(dir, base = '') {
   const entries = await fsp.readdir(dir, { withFileTypes: true });
   const out = [];
   for (const e of entries) {
     if (e.name.startsWith('.')) continue;
     const rel = base ? `${base}/${e.name}` : e.name;
+    if (isExcluded(rel)) continue;   // 目录在递归前剪枝：子文件不会被读取，也不计入扫描数
     const full = path.join(dir, e.name);
     if (e.isDirectory()) out.push(...(await walk(full, rel)));
     else out.push({ rel, full, name: e.name });
@@ -324,10 +362,19 @@ function countKinds(docs) {
   return out;
 }
 
+/* 页面「数据来源」里显示的扫描目录：工程内写成相对路径（docs），工程外给绝对路径 */
+function docsDirLabel() {
+  const rel = path.relative(ROOT, DOCS_DIR);
+  return rel && !rel.startsWith('..') && !path.isAbsolute(rel)
+    ? rel.split(path.sep).join('/')
+    : DOCS_DIR;
+}
+
 function snapshotPayload(docs, skipped) {
   return {
     generatedAt: new Date().toISOString(),
     docsRoot: VIRTUAL_ROOT + '/',
+    docsDir: docsDirLabel(),
     count: docs.length,
     kinds: countKinds(docs),
     skipped,
@@ -339,6 +386,7 @@ function indexPayload(docs, skipped) {
   return {
     generatedAt: new Date().toISOString(),
     docsRoot: VIRTUAL_ROOT + '/',
+    docsDir: docsDirLabel(),
     count: docs.length,
     kinds: countKinds(docs),
     skipped,
@@ -722,6 +770,9 @@ async function build(mode = 'build') {
     const mgCfg = (cfg.value.mermaid || {});
     console.log('✓ 已刷新文档快照与页面配置');
     console.log(`  文档目录：${DOCS_DIR}${DOCS_DIR === DEFAULT_DOCS_DIR ? '' : '（命令行指定）'}`);
+    if (EXCLUDES.length) {
+      console.log(`  排除路径：${EXCLUDES.join('、')}（--exclude，不参与扫描）`);
+    }
     console.log(`  文档：${docs.length} 篇（markdown ${k.markdown} 篇${k.mindmap ? ` · 思维导图 ${k.mindmap} 篇` : ''}` +
       `，扫描 ${files} 个文件，忽略 ${skipped} 个不支持的文件）`);
     docs.forEach((d) => console.log(`    · ${d.path}  ${(d.size / 1024).toFixed(1)} KB  ${d.title}`));
@@ -948,6 +999,9 @@ async function serve(port, kinds, host = DEFAULT_HOST, realtimeHtml) {
   const width = Math.max(...entries.map((e) => e.url.length));
   console.log('✓ 文档服务已启动（实时模式：修改文档后刷新页面即生效）');
   console.log(`  文档目录：${DOCS_DIR}${DOCS_DIR === DEFAULT_DOCS_DIR ? '' : '（命令行指定）'}`);
+  if (EXCLUDES.length) {
+    console.log(`  排除路径：${EXCLUDES.join('、')}（--exclude，不参与扫描）`);
+  }
   console.log(`  监听地址：${hostForUrl(host)}:${actual}` +
     (wildcard ? `（所有网卡，同一网络内的其它机器可以访问）` :
       isLoopbackHost(host) ? `（仅本机）` : `（指定地址）`));
@@ -1051,6 +1105,14 @@ for (let i = 0; i < argv.length; i++) {
     if (hostFlag) cliError(`${a} 与 ${hostFlag} 只能选一个（监听地址已经用 ${hostFlag} 指定过了）`);
     host = LAN_HOST;
     hostFlag = '--lan';
+  } else if (a === '--exclude') {
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith('-')) {
+      cliError('--exclude 后面要跟相对文档目录的路径，例如：node build-docs.mjs --exclude a/b --serve ./');
+    }
+    const norm = normalizeExclude(v);
+    if (!EXCLUDES.includes(norm)) EXCLUDES.push(norm);
+    i++;
   } else if (a === '--docs') {
     cliError('--docs 已取消：目录直接写在参数后面即可，例如：node build-docs.mjs --serve D:\\some\\docs');
   } else if (a.startsWith('-') && a !== '-') {
@@ -1072,6 +1134,9 @@ if (hostFlag && mode !== 'serve') {
 
 if (action && docsDir !== null) {
   cliError(`${action} 不接受文档目录参数：${docsDir}`);
+}
+if (action && EXCLUDES.length) {
+  cliError(`${action} 不接受 --exclude 参数`);
 }
 
 if (action === '--stamp-version') {
