@@ -53,6 +53,7 @@
     mode: 'snapshot', generatedAt: null, skipped: 0,
     docsRoot: 'docs/', docsDir: '',
     current: null, headings: [],
+    view: 'home',                        // home | doc | search：首页滚动位置只在首页记
     leftOpen: false, rightOpen: true,
     /* 思维导图：当前导图、markmap 实例、大纲、折叠集合 */
     mindmap: null, mm: null, mmOutline: [], mmFolded: [],
@@ -912,7 +913,9 @@
     $('article').innerHTML = '<div class="overview">' + html + '</div>';
     exitMindmapFullscreen();
     popArticle();
-    window.scrollTo(0, 0);
+    /* 后退 / 前进回到这条记录时，回到当初的滚动位置；新条目没有 sy，从顶部开始 */
+    var sy = history.state && typeof history.state.sy === 'number' ? history.state.sy : 0;
+    window.scrollTo(0, sy);
   }
 
   /* ---------- 正文 ---------- */
@@ -2035,15 +2038,18 @@
     var h = parseHash();
     syncBarWithEntry();               // 开合跟着历史条目走，分支里不再改它
     if (h.p && state.byPath[h.p]) {
+      state.view = 'doc';
       returnLeftPane();
       var jump = h.q ? { q: h.q, occ: Number(h.k) || 0 } : null;
       if (jump) fillSearchBar(jump.q);
       if (isMindmapDoc(state.byPath[h.p])) renderMindmapDoc(state.byPath[h.p]);
       else renderDoc(h.p, h.h || null, jump);
     } else if (h.s !== undefined) {
+      state.view = 'search';
       fillSearchBar(h.s);
       renderSearchPage(h.s);
     } else {
+      state.view = 'home';
       returnLeftPane();
       renderOverview();
     }
@@ -2056,12 +2062,25 @@
   $('printBtn').onclick = function () { window.print(); };
   /* ---------- 顶栏搜索条 ---------- */
   function searchBarOpen() { return document.body.classList.contains('search-open'); }
-  /* 开合是「这一条历史记录」的状态，不是全局开关：记在 history.state 里，
-     前进 / 后退回到哪一条就还原成那条当初的样子。 */
-  function recordBar(open) {
-    try { history.replaceState({ sb: open ? 1 : 0 }, ''); }
+  /* 开合、首页滚动位置都是「这一条历史记录」的状态，不是全局的：记在 history.state 里，
+     前进 / 后退回到哪一条就还原成那条当初的样子。合并写回，别把同一条上的其它状态顶掉。 */
+  function recordEntry(patch) {
+    try { history.replaceState(Object.assign({}, history.state || {}, patch), ''); }
     catch (e) { }                     // 写不了的宿主（沙箱内嵌等）只是还原不了，跳转照常
   }
+  function recordBar(open) { recordEntry({ sb: open ? 1 : 0 }); }
+  /* 滚动位置只记首页：离开前随手记进当前条目，回来时 renderOverview() 按 sy 落位。
+     文档页的落点由 h= 锚点 / 搜索命中决定，不掺和。 */
+  var saveScrollFrame = 0;
+  function saveHomeScroll() {
+    if (state.view !== 'home' || saveScrollFrame) return;
+    var y = Math.round(window.scrollY);
+    saveScrollFrame = requestAnimationFrame(function () {
+      saveScrollFrame = 0;
+      if (state.view === 'home') recordEntry({ sy: y });
+    });
+  }
+  window.addEventListener('scroll', saveHomeScroll, { passive: true });
   function setSearchBar(open, focus) {
     document.body.classList.toggle('search-open', !!open);
     $('searchBtn').setAttribute('aria-expanded', String(!!open));
