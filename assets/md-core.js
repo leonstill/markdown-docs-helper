@@ -169,6 +169,150 @@ var MarkdownCore = (function () {
     return out;
   }
 
+  /* ---------- 全文搜索的查询解析 ----------
+     text 模式（默认）：空格与 || 表示「或」，&& 表示「与」，! 表示「非」；
+     优先级 ! > && > ||，不支持括号。反斜杠转义下一个字符（\& \| \! \\ \空格）。
+     只有成对的 && / || 是运算符，单个 & | 按字面处理（R&D 不用转义）。
+     regex 模式：整串就是一个 JS 正则，仍按行匹配（不跨行），不区分大小写。
+     返回 { mode, raw, empty, error, clauses:[{pos,neg}], re }：
+     clauses 是「或」连接的若干分支，每个分支内部全是「与」；
+     error 是给人看的中文提示，非空时不要拿它去搜。 */
+  function parseSearchQuery(raw, asRegex) {
+    var s = String(raw == null ? '' : raw).trim();
+    var out = {
+      mode: asRegex ? 'regex' : 'text', raw: s, empty: !s,
+      error: null, clauses: [], re: null
+    };
+    if (!s) return out;
+    if (asRegex) {
+      try { out.re = new RegExp(s, 'gi'); out.clauses = [{ pos: [s], neg: [] }]; }
+      catch (e) { out.error = '正则表达式无效：' + ((e && e.message) || e); }
+      return out;
+    }
+
+    var toks = [], buf = '', neg = false, i = 0;
+    function flush() {
+      if (!buf) return;
+      toks.push({ t: 'term', text: buf, neg: neg });
+      buf = ''; neg = false;
+    }
+    while (i < s.length) {
+      var c = s.charAt(i);
+      if (c === '\\') {
+        if (i + 1 < s.length) { buf += s.charAt(i + 1); i += 2; }
+        else { buf += '\\'; i++; }                 // 末尾孤立的 \ 就当字面反斜杠
+        continue;
+      }
+      if (c === '&' && s.charAt(i + 1) === '&') { flush(); toks.push({ t: 'and' }); i += 2; continue; }
+      if (c === '|' && s.charAt(i + 1) === '|') { flush(); toks.push({ t: 'or' }); i += 2; continue; }
+      if (c === '!') { flush(); neg = !neg; i++; continue; }   // !!x 等价于 x
+      if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { flush(); i++; continue; }
+      buf += c; i++;
+    }
+    flush();
+    if (neg) { out.error = '! 后面缺少要排除的关键词'; return out; }
+
+    /* 相邻两个词之间省略了 ||：补一个「或」，但显式运算符两侧不补 */
+    var seq = [];
+    toks.forEach(function (t) {
+      if (t.t === 'term' && seq.length && seq[seq.length - 1].t === 'term') seq.push({ t: 'or' });
+      seq.push(t);
+    });
+    if (!seq.length) return out;
+    if (seq[0].t !== 'term' || seq[seq.length - 1].t !== 'term') {
+      out.error = '运算符 && 和 || 的前后都需要关键词';
+      return out;
+    }
+    for (var k = 0; k + 1 < seq.length; k++) {
+      if (seq[k].t !== 'term' && seq[k + 1].t !== 'term') {
+        out.error = '运算符 && 和 || 之间缺少关键词';
+        return out;
+      }
+    }
+
+    var cur = { pos: [], neg: [] }, clauses = [];
+    seq.forEach(function (t) {
+      if (t.t === 'or') { clauses.push(cur); cur = { pos: [], neg: [] }; return; }
+      if (t.t === 'and') return;
+      (t.neg ? cur.neg : cur.pos).push(t.text);
+    });
+    clauses.push(cur);
+    for (var ci = 0; ci < clauses.length; ci++) {
+      if (!clauses[ci].pos.length) {
+        out.error = '每个「或」分支都要有正向关键词；想表达「有 a 且没有 b」请写 a && !b';
+        return out;
+      }
+    }
+    out.clauses = clauses;
+    return out;
+  }
+
+  /* 一行里所有命中（按位置合并重叠：同一位置取更长的那段）。
+     spec 可以是 parseSearchQuery 的结果，也可以是 searchActiveTerms 筛过的 { mode, terms }。
+     正则零长度命中（如 ^ 或 a*）没有可标注的文字，直接跳过。 */
+  function searchScanLine(line, spec) {
+    var s = String(line == null ? '' : line), hits = [];
+    if (!spec || spec.error || spec.empty) return hits;
+    if (spec.mode === 'regex') {
+      if (!spec.re) return hits;
+      spec.re.lastIndex = 0;
+      var m;
+      while ((m = spec.re.exec(s))) {
+        if (!m[0].length) {
+          spec.re.lastIndex = Math.min(s.length + 1, spec.re.lastIndex + 1);
+          continue;
+        }
+        hits.push({ start: m.index, end: m.index + m[0].length });
+        if (spec.re.lastIndex <= m.index) spec.re.lastIndex = m.index + 1;
+      }
+    } else {
+      var low = s.toLowerCase();
+      (spec.terms || []).forEach(function (t) {
+        var lt = String(t).toLowerCase();
+        if (!lt) return;
+        var at = low.indexOf(lt);
+        while (at >= 0) {
+          hits.push({ start: at, end: at + lt.length });
+          at = low.indexOf(lt, at + lt.length);
+        }
+      });
+    }
+    hits.sort(function (a, b) { return a.start - b.start || b.end - a.end; });
+    var out = [], end = -1;
+    hits.forEach(function (h) {
+      if (h.start >= end) { out.push(h); end = h.end; }
+    });
+    return out;
+  }
+
+  /* 文档级判定：这篇文档满足哪些「或」分支，就把这些分支的正向词并起来。
+     不满足（或错误 / 空查询）返回 null。AND 允许词分布在不同的行上。
+     regex 模式返回 spec 本身，好让调用方继续用同一个正则扫描各行。 */
+  function searchActiveTerms(spec, lines) {
+    if (!spec || spec.error || spec.empty) return null;
+    lines = lines || [];
+    if (spec.mode === 'regex') {
+      for (var i = 0; i < lines.length; i++) {
+        if (searchScanLine(lines[i], spec).length) return spec;
+      }
+      return null;
+    }
+    var low = lines.join('\n').toLowerCase();
+    var hit = false, terms = [];
+    spec.clauses.forEach(function (c) {
+      var ok = c.pos.every(function (t) { return low.indexOf(String(t).toLowerCase()) >= 0; }) &&
+        c.neg.every(function (t) { return low.indexOf(String(t).toLowerCase()) < 0; });
+      if (!ok) return;
+      hit = true;
+      c.pos.forEach(function (t) {
+        var key = String(t).toLowerCase();
+        if (!terms.some(function (x) { return x.toLowerCase() === key; })) terms.push(t);
+      });
+    });
+    if (!hit) return null;
+    return { mode: 'text', raw: spec.raw, terms: terms, empty: false, error: null };
+  }
+
   /* ---------- 行内渲染 ---------- */
   function inline(src, ctx, depth) {
     depth = depth || 0;
@@ -568,7 +712,10 @@ var MarkdownCore = (function () {
     parseRefs: parseRefs,
     plain: plain,
     slugify: slugify,
-    inline: inline
+    inline: inline,
+    parseSearchQuery: parseSearchQuery,
+    searchScanLine: searchScanLine,
+    searchActiveTerms: searchActiveTerms
   };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = MarkdownCore;

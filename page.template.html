@@ -50,8 +50,11 @@
 </header>
 
 <form class="searchbar" id="searchBar" role="search" autocomplete="off">
-  <svg class="sb-mg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.4 10.4 14 14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-  <input class="sb-input" id="topSearch" type="text" placeholder="搜索全部文档内容…（回车搜索 · Esc 收起）" aria-label="搜索内容" spellcheck="false">
+  <button class="btn icon sb-regex" id="regexBtn" type="button" aria-pressed="false"
+          title="正则表达式模式：关（Alt+R 切换）" aria-label="正则表达式模式">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="3.4" cy="12.2" r="1.1" fill="currentColor"/><path d="M10.6 3.2v6.4M7.8 4.8l5.6 3.2M13.4 4.8l-5.6 3.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+  </button>
+  <input class="sb-input" id="topSearch" type="text" placeholder="搜索全部文档：空格＝或，&amp;&amp; 与，! 非（回车 · Esc）" aria-label="搜索内容" spellcheck="false">
   <button class="btn icon" type="button" id="topClear" title="清除" aria-label="清除输入内容">
     <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
   </button>
@@ -73,11 +76,15 @@
     <div class="sidebar-foot" id="foot"></div>
   </aside>
 
+  <div class="pane-split" id="splitL" aria-hidden="true" title="拖动调整左栏宽度（双击复原）"></div>
+
   <main>
     <div class="w-edge l" id="wEdgeL" aria-hidden="true" title="拖动调整正文宽度（向两边对称，双击复原）"></div>
     <article class="article" id="article"></article>
     <div class="w-edge r" id="wEdgeR" aria-hidden="true" title="拖动调整正文宽度（向两边对称，双击复原）"></div>
   </main>
+
+  <div class="pane-split" id="splitR" aria-hidden="true" title="拖动调整右栏宽度（双击复原）"></div>
 
   <aside class="toc" id="tocPane">
     <div class="pane-h">
@@ -116,36 +123,27 @@
   <div class="dlg-foot"><button class="btn" type="button" data-close>关闭</button></div>
 </dialog>
 
-<dialog class="dlg" id="helpDialog" aria-labelledby="helpHeading">
+<dialog class="dlg dlg-help" id="helpDialog" aria-labelledby="helpHeading">
   <div class="dlg-h">
     <span class="dlg-t" id="helpHeading">帮助</span>
     <button class="dlg-x" type="button" data-close title="关闭" aria-label="关闭">✕</button>
   </div>
-  <div class="dlg-body">
-    <h3 class="help-h">三栏与工具栏</h3>
-    <p class="help-p">左栏是文档目录（<kbd>[</kbd>），右栏是本篇大纲（<kbd>]</kbd>）。顶栏从左到右：
-      左栏开关、本菜单、上一篇 / 下一篇、全文搜索、打印或导出 PDF、复制当前文档链接、深浅色切换、右栏开关。
-      向下滚过一段后，正文右下角会浮出圆形 ↑ 按钮，点一下滚回顶部。</p>
-    <h3 class="help-h">快捷键</h3>
-    <dl class="help-keys">
-      <dt><kbd>[</kbd> / <kbd>]</kbd></dt><dd>收起 / 展开左侧目录栏、右侧大纲栏</dd>
-      <dt><kbd>/</kbd></dt><dd>聚焦左栏的搜索框</dd>
-      <dt><kbd>Esc</kbd></dt><dd>收起搜索条 / 关闭本对话框 / 退出图表全屏</dd>
-      <dt><kbd>Ctrl</kbd>+<kbd>P</kbd></dt><dd>打印或导出 PDF</dd>
-    </dl>
-    <h3 class="help-h">正文宽度</h3>
-    <p class="help-p">把鼠标移到正文左或右的边缘，出现竖线后按住横向拖动，正文会<strong>对称</strong>变宽变窄；
-      拖动时两侧竖线同时亮起，两条线之间就是当下正文的宽度。双击任一条竖线回到默认宽度。
-      拖出来的宽度记在本机浏览器里，优先于 <code>config.json</code> 的 <code>reading.maxWidth</code>；
-      上限是两侧栏之间当下还剩多少，窗口缩小或另一栏展开时会跟着收。</p>
-    <h3 class="help-h">全文搜索</h3>
-    <p class="help-p">顶栏放大镜展开搜索条，回车在所有文档的正文里查找，结果按文档分组列出，点击跳转并高亮命中处。</p>
-    <h3 class="help-h">两种打开方式</h3>
-    <p class="help-p">双击 <code>md-viewer.html</code> 是离线单文件（文档正文已内置，不联网）；
-      <code>node build-docs.mjs --serve</code> 打开 <code>index.html</code> 是实时模式，改文档刷新即生效。</p>
+  <!-- 顶部二级导航：页签由 md-app.js 按 help/*.md 生成，正文整篇导入、前端渲染 -->
+  <div class="help-tabs" id="helpTabs" role="tablist" aria-label="帮助主题"></div>
+  <div class="dlg-body help-body">
+    <div class="help-pages" id="helpPages"></div>
   </div>
-  <div class="dlg-foot"><button class="btn" type="button" data-close>关闭</button></div>
+  <div class="dlg-foot">
+    <span class="dlg-hint">拖动右下角调整大小</span>
+    <button class="btn" type="button" data-close>关闭</button>
+  </div>
 </dialog>
+
+<!-- ==================================================================
+     帮助内容：help/ 下每页一个 Markdown，构建时整份导入；改文案请改 help/ 下的文件，
+     再跑一次 node build-docs.mjs。--check 会把帮助内容算进「产物是否过期」。
+     ================================================================== -->
+<script id="help-docs" type="application/json"></script>
 
 <!-- ==================================================================
      页面配置：对应工程根目录下 config.json 的内容。

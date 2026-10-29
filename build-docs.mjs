@@ -101,6 +101,7 @@ const INDEX_HTML = path.join(ROOT, 'index.html');       // 实时服务版（生
 const TEMPLATE = path.join(ROOT, 'page.template.html'); // 两个页面唯一的布局来源
 const INDEX = path.join(ROOT, 'docs-index.json');
 const CONFIG = path.join(ROOT, 'config.json');
+const HELP_DIR = path.join(ROOT, 'help');           // 帮助对话框的每一页：一个 .md
 const PKG = path.join(ROOT, 'package.json');
 const VERSION_FILE = path.join(ROOT, 'VERSION');    // 每次提交由 pre-commit 钩子刷新，见 --stamp-version
 const SNAPSHOT_RE = /(<script id="docs-snapshot" type="application\/json">)([\s\S]*?)(<\/script>)/;
@@ -233,6 +234,32 @@ function titleOf(text, fallback) {
     if (m) return m[1].trim();
   }
   return fallback;
+}
+
+/* ---------- 帮助文档（只读） ----------
+   帮助对话框的正文不写在模板里：help/ 下每页一个 .md，构建时整份读进页面，
+   按文件名排序（数字前缀决定页签顺序），页签标题取每篇的第一个 H1。 */
+async function readHelpPages() {
+  let entries;
+  try {
+    entries = await fsp.readdir(HELP_DIR, { withFileTypes: true });
+  } catch (e) {
+    throw new Error(`找不到帮助文档目录：${path.relative(ROOT, HELP_DIR) || 'help'}`);
+  }
+  const files = entries
+    .filter((e) => e.isFile() && /\.md$/i.test(e.name))
+    .map((e) => e.name)
+    .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+  if (!files.length) {
+    throw new Error(`帮助文档目录 ${path.relative(ROOT, HELP_DIR)} 里没有 .md 文件`);
+  }
+  const pages = [];
+  for (const name of files) {
+    const text = (await fsp.readFile(path.join(HELP_DIR, name), 'utf8')).replace(/^\uFEFF/, '');
+    const fallback = name.replace(/\.md$/i, '').replace(/^\d+[-_.\s]*/, '');
+    pages.push({ title: titleOf(text, fallback), md: text });
+  }
+  return pages;
 }
 
 function sortDocs(docs) {
@@ -400,6 +427,7 @@ function indexPayload(docs, skipped) {
 /* "<" 转义为 \u003c，避免正文中出现 </script> 提前闭合脚本标签 */
 function renderSnapshot(payload) { return JSON.stringify(payload).replace(/</g, '\\u003c'); }
 function renderConfig(payload) { return JSON.stringify(payload).replace(/</g, '\\u003c'); }
+function renderHelp(pages) { return JSON.stringify(pages).replace(/</g, '\\u003c'); }
 function renderIndex(payload) { return JSON.stringify(payload, null, 2); }
 
 /* 递归排序对象键，用于与顺序无关的内容比较 */
@@ -622,17 +650,19 @@ function installHook() {
 }
 
 /* ---------- 两个页面的生成：模板 → 一次性替换 → md-viewer.html / index.html ----------
-   模板 page.template.html 里只有六个空占位，其余全是纯 HTML，一眼能看懂：
+   模板 page.template.html 里只有八个空占位，其余全是纯 HTML，一眼能看懂：
      <script id="viewer-config" type="application/json"></script>   页面配置
      <script id="docs-snapshot" type="application/json"></script>   文档快照
      <script id="build-info" type="application/json"></script>      版本串（两个产物同一份）
+     <script id="help-docs" type="application/json"></script>       帮助页正文（读 help/*.md）
      <script id="vendor-*"></script>                                引擎空块（4 段）
    两个产物的差别**只有**这些占位，所以用同一个替换函数、同一份文档数据生成，
    不存在“先写一个文件再回头改另一个”的二次加工。 */
-function renderPage(template, { cfgText, snapText, buildInfoText, bundles, mode }) {
+function renderPage(template, { cfgText, snapText, buildInfoText, helpText, bundles, mode }) {
   const value = (id) => {
     if (id === 'viewer-config') return cfgText;
     if (id === 'build-info') return buildInfoText;
+    if (id === 'help-docs') return helpText;
     if (id === 'docs-snapshot') return mode === 'realtime' ? '{}' : snapText;
     const b = bundles.find((x) => x.id === id);
     if (!b) throw new Error(`模板里出现了未知脚本块：${id}`);
@@ -642,11 +672,11 @@ function renderPage(template, { cfgText, snapText, buildInfoText, bundles, mode 
   };
   /* 一次性扫描所有占位块，按出现顺序拼接，避免「替换完再去重新定位下一个」那种脆弱写法。
      每个块都替换成完整的 <script ...>...</script>，不留半截标签。 */
-  const re = /<script id="(viewer-config|docs-snapshot|build-info|vendor-d3|vendor-markmap-lib|vendor-markmap-view|vendor-mermaid)"([^>]*)>([\s\S]*?)<\/script>/g;
+  const re = /<script id="(viewer-config|docs-snapshot|build-info|help-docs|vendor-d3|vendor-markmap-lib|vendor-markmap-view|vendor-mermaid)"([^>]*)>([\s\S]*?)<\/script>/g;
   let out = '', last = 0, seen = 0, m;
   while ((m = re.exec(template))) {
     const id = m[1];
-    /* viewer-config / docs-snapshot / build-info 不在 bundles 里，只有 vendor-* 才是引擎块 */
+    /* viewer-config / docs-snapshot / build-info / help-docs 不在 bundles 里，只有 vendor-* 才是引擎块 */
     const b = id.startsWith('vendor-') ? bundles.find((x) => x.id === id) : null;
     if (id.startsWith('vendor-') && !b) throw new Error(`模板里出现了未知脚本块：${id}`);
     const inner = value(id);
@@ -660,8 +690,8 @@ function renderPage(template, { cfgText, snapText, buildInfoText, bundles, mode 
     seen++;
   }
   out += template.slice(last);
-  if (seen !== 3 + bundles.length) {
-    throw new Error(`模板里的占位块数量不对：期望 ${3 + bundles.length} 个，实际 ${seen} 个`);
+  if (seen !== 4 + bundles.length) {
+    throw new Error(`模板里的占位块数量不对：期望 ${4 + bundles.length} 个，实际 ${seen} 个`);
   }
   return out;
 }
@@ -689,15 +719,17 @@ async function build(mode = 'build') {
   const cfgText = renderConfig(cfg.value);
   const buildInfo = readBuildInfo();
   const buildInfoText = renderConfig(buildInfo);
+  const helpPages = await readHelpPages();
+  const helpText = renderHelp(helpPages);
   const needMermaid = mermaidEnabled(cfg.value) && needsMermaidEngine(docs);
   const bundles = await readBundles(cfg.value, { needMermaid });
   const template = await fsp.readFile(TEMPLATE, 'utf8');
   const wantOffline = mode !== 'serve';   // 离线单文件（引擎内联）要不要拼：--serve 用不上
   /* 文档快照文本只有离线单文件用得上（实时版页面里那块恒为 {}）；--serve 就省掉这份拼接 */
   const snapText = wantOffline ? renderSnapshot(snap) : '';
-  const realtime = renderPage(template, { cfgText, snapText, buildInfoText, bundles, mode: 'realtime' });
+  const realtime = renderPage(template, { cfgText, snapText, buildInfoText, helpText, bundles, mode: 'realtime' });
   const next = wantOffline
-    ? renderPage(template, { cfgText, snapText, buildInfoText, bundles, mode: 'offline' })
+    ? renderPage(template, { cfgText, snapText, buildInfoText, helpText, bundles, mode: 'offline' })
     : null;
 
   if (check) {
@@ -788,6 +820,7 @@ async function build(mode = 'build') {
       ((sb.exclude || []).length ? ` · 排除 ${(sb.exclude || []).length} 项` : '') +
       (hidden ? ` · 隐藏 ${hidden} 篇` : ''));
     console.log(`  配置来源：config.json（${cfg.source === 'file' ? '已读取' : '缺失，用默认值'}）`);
+    console.log(`  帮助：${helpPages.length} 页（${path.relative(ROOT, HELP_DIR).split(path.sep).join('/')}）`);
     console.log(`  版本：${buildInfo.version}+${buildInfo.commit}` +
       (buildInfo.source === 'VERSION' ? '（VERSION）'
         : '（VERSION 缺失或格式不对，退回 package.json；生成它：node build-docs.mjs --stamp-version）'));

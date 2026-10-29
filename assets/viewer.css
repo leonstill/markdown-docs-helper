@@ -136,7 +136,7 @@ html[data-theme="dark"] #themeBtn .i-moon{display:none}
 body.search-open .searchbar{transform:none; opacity:1; pointer-events:auto}
 /* 展开时顶部一共遮住这么多：所有「让开顶栏」的算法都读这一个变量 */
 body.search-open{--overlay-h:calc(52px + var(--searchbar-h))}
-.searchbar .sb-mg{flex:0 0 auto; color:var(--fg-muted)}
+.searchbar .sb-regex{flex:0 0 auto}
 .searchbar .sb-input{
   flex:1 1 auto; min-width:0; height:32px; padding:0 10px; font-family:inherit; font-size:13.5px;
   color:var(--fg); background:var(--bg); border:1px solid var(--border); border-radius:6px;
@@ -144,6 +144,8 @@ body.search-open{--overlay-h:calc(52px + var(--searchbar-h))}
 }
 .searchbar .sb-input:hover{border-color:var(--fg-muted)}
 .searchbar .sb-input:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+/* 查询解析失败（正则写错、纯否定词）：输入框标红，错误正文里也会说一遍 */
+.searchbar .sb-input.bad{border-color:#cf222e; box-shadow:0 0 0 3px rgba(207,34,46,.16)}
 /* 搜索条展开时三栏一起往下让位（正文靠 padding 推，侧栏靠 sticky 的 top），否则第一行会被盖住 */
 body.search-open main{padding-top:var(--searchbar-h)}
 body.search-open .sidebar,body.search-open .toc{
@@ -185,6 +187,30 @@ body.right-hidden .toc{
 }
 main{flex:1 1 auto; min-width:0; display:flex; justify-content:center; position:relative;
   transition:padding-top var(--dur) var(--ease)}
+
+/* ============ 侧栏宽度分割条（拖动调左右栏宽，见 md-app.js） ============ */
+/* flex 项宽度为 0，不占布局，亮线画在正中。
+   可点区域只往正文那一侧探 6px：左栏最右边是滚动条，不能盖住；
+   正文边缘的感应条有 21px，让出这 6px 也还够抓。 */
+.pane-split{
+  flex:0 0 0; width:0; align-self:flex-start; position:sticky; top:52px;
+  height:calc(100vh - 52px); z-index:7; cursor:col-resize; touch-action:none;
+}
+.pane-split::before,.pane-split::after{content:""; position:absolute; top:0; bottom:0}
+.pane-split::before{
+  width:2px; left:50%; transform:translateX(-50%); z-index:1;
+  background:var(--accent); opacity:0; transition:opacity .16s var(--ease);
+}
+.pane-split::after{width:6px}
+#splitL::after{left:0}
+#splitR::after{right:0}
+.pane-split:hover::before,body.pane-dragging .pane-split::before{opacity:.5}
+body.pane-dragging .pane-split.p-holding::before{opacity:.85}
+/* 拖动时指针跑得比条子快，光标与禁选都靠 body 维持；侧栏自己的宽度过渡也得让路，不然跟手会发飘 */
+body.pane-dragging{cursor:col-resize; user-select:none}
+body.pane-dragging .sidebar,body.pane-dragging .toc{transition:none}
+body.left-hidden #splitL,body.right-hidden #splitR{pointer-events:none}
+body.search-open .pane-split{top:var(--overlay-h); height:calc(100vh - var(--overlay-h))}
 
 /* 侧栏标题行 + 右上角关闭按钮 */
 .pane-h{
@@ -441,6 +467,9 @@ html[data-theme="dark"] .notice{border-color:#9e6a03; background:#2a2008; color:
 .sr-head a.sr-t:hover{color:var(--accent); text-decoration:none}
 .sr-head .sr-p{font-family:var(--font-mono); font-size:11.5px; color:var(--fg-muted)}
 .sr-head .sr-n{font-family:var(--font-mono); font-size:11.5px; color:var(--accent)}
+/* 结果页 meta 里的模式徽标：正则模式才出现 */
+.sr-mode{font-family:var(--font-mono); font-size:11px; color:var(--accent);
+  border:1px solid var(--accent); border-radius:999px; padding:0 7px}
 .sr-head .sr-graph{font-size:11px; color:var(--fg-muted); border:1px solid var(--border);
   border-radius:999px; padding:1px 8px; white-space:nowrap}
 .sr-item{display:block; padding:8px 14px; border-bottom:1px solid var(--border-soft); color:var(--fg)}
@@ -660,23 +689,47 @@ body.right-hidden .to-top{right:22px}
   padding:9px 14px; border-top:1px solid var(--border-soft); background:var(--bg-soft);
   border-radius:0 0 var(--radius) var(--radius);
 }
+.dlg-hint{margin-right:auto; font-size:12px; color:var(--fg-muted)}
+/* 帮助：比关于框更大，四角里拖右下角可以调大小（原生 resize，尺寸记在本机） */
+.dlg-help{
+  width:min(760px, calc(100vw - 32px));
+  height:min(72vh, 640px);
+  min-width:min(320px, calc(100vw - 32px)); min-height:min(260px, calc(100vh - 32px));
+  max-width:calc(100vw - 32px); max-height:calc(100vh - 32px);
+  resize:both; overflow:hidden;
+}
+.help-tabs{
+  display:flex; gap:2px; flex:0 0 auto; padding:0 10px;
+  background:var(--bg-soft); border-bottom:1px solid var(--border-soft);
+  overflow-x:auto; scrollbar-width:none;
+}
+.help-tabs::-webkit-scrollbar{display:none}
+.help-tab{
+  appearance:none; margin-bottom:-1px; padding:10px 12px 9px;
+  border:0; border-bottom:2px solid transparent; background:none;
+  color:var(--fg-muted); font:inherit; font-size:13px; line-height:1; white-space:nowrap;
+  cursor:pointer; transition:color .16s var(--ease), border-color .16s var(--ease);
+}
+.help-tab:hover{color:var(--fg)}
+.help-tab[aria-selected="true"]{color:var(--accent); border-bottom-color:var(--accent); font-weight:700}
+.help-tab:focus-visible{outline:2px solid var(--accent); outline-offset:-2px; border-radius:4px}
+.help-body{padding:14px 20px 22px}
+/* 帮助正文复用 .article 的 Markdown 排版，只把它的正文宽度与页边距收掉 */
+.help-md{width:auto; max-width:none; padding:0}
+.help-md h1{font-size:1.5em; margin-top:0}
+.help-md h2{font-size:1.2em}
+.help-md h3{font-size:1.05em}
+.help-md pre.code code{font-size:12.5px}
 /* 关于 */
 .about-name{font-size:17px; font-weight:700; margin-bottom:10px}
 .about-list{display:grid; grid-template-columns:auto 1fr; gap:4px 14px; margin:0; font-size:14px}
 .about-list dt{color:var(--fg-muted); text-align:right}
 .about-list dd{margin:0; font-family:var(--font-mono); font-size:13.5px; word-break:break-all}
 .about-note{margin:12px 0 0; font-size:12.5px; line-height:1.7; color:var(--fg-muted)}
-/* 帮助 */
-.help-h{margin:16px 0 4px; font-size:13px; font-weight:700; letter-spacing:.04em; color:var(--fg-muted)}
-.help-h:first-child{margin-top:0}
-.help-p{margin:0; font-size:14px; line-height:1.8}
-.help-p code,.about-note code{
+.about-note code{
   font-family:var(--font-mono); font-size:.86em; padding:.05em .3em;
   background:var(--code-bg); border:1px solid var(--border-soft); border-radius:4px;
 }
-.help-keys{display:grid; grid-template-columns:auto 1fr; gap:5px 14px; margin:0; font-size:14px}
-.help-keys dt{text-align:right; white-space:nowrap}
-.help-keys dd{margin:0; color:var(--fg-muted); font-size:13.5px; line-height:1.7}
 
 @media (max-width:1240px){
   :root{--left-w:252px; --right-w:220px}
@@ -711,6 +764,8 @@ body.right-hidden .to-top{right:22px}
   body.side-open .to-top,body.side-open .to-top.on{opacity:0; visibility:hidden; pointer-events:none}
   /* 窄屏正文已经贴到屏幕边，没有「向外拖」的余地，感应条收起 */
   .w-edge{display:none}
+  /* 两侧栏是抽屉，宽度由视口决定，分割条没有意义 */
+  .pane-split{display:none}
   .topbar .brand .bs{display:none}
   .topbar .path{display:none}
   .topbar .btn.icon{padding:0 5px}
@@ -748,7 +803,7 @@ body.right-hidden .to-top{right:22px}
 @media print{
   :root{--bg:#fff; --bg-soft:#fff; --bg-elev:#fff; --fg:#000; --fg-muted:#444;
         --border:#bbb; --border-soft:#ddd; --code-bg:#f7f7f7; --quote-bg:#fafafa; --shadow:none}
-  .topbar,.searchbar,.sidebar,.toc,#scrim,.w-edge,.menu,.dlg,.to-top,.anchor,.meta .no-print,.intro .anchor{display:none !important}
+  .topbar,.searchbar,.sidebar,.toc,#scrim,.w-edge,.pane-split,.menu,.dlg,.to-top,.anchor,.meta .no-print,.intro .anchor{display:none !important}
   .layout{display:block}
   main{display:block}
   body.search-open main{padding-top:0}

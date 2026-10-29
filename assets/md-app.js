@@ -54,6 +54,7 @@
     docsRoot: 'docs/', docsDir: '',
     current: null, headings: [],
     view: 'home',                        // home | doc | search：首页滚动位置只在首页记
+    regexMode: false,                    // 顶栏搜索条：输入内容是正则还是普通关键词组合
     leftOpen: false, rightOpen: true,
     /* 思维导图：当前导图、markmap 实例、大纲、折叠集合 */
     mindmap: null, mm: null, mmOutline: [], mmFolded: [],
@@ -302,6 +303,8 @@
     document.body.classList.toggle('side-open', state.leftOpen || state.rightOpen);
     $('toggleLeft').setAttribute('aria-pressed', String(state.leftOpen));
     $('toggleRight').setAttribute('aria-pressed', String(state.rightOpen));
+    // 开合改变了可用宽度：拖出来的宽度按新空间重新钳一次
+    paneApply('left'); paneApply('right');
   }
   function setPane(which, open) {
     // 用户自己动手开合左栏就算接管了它，结果页的「借用」不再替他还原
@@ -326,6 +329,89 @@
   }
   function togglePane(which) {
     setPane(which, which === 'left' ? !state.leftOpen : !state.rightOpen);
+  }
+
+  /* ---------- 左右栏宽度：拖两侧栏与正文之间的分割条 ---------- */
+  var PANE_MIN = 180;          // 再窄标题就只剩省略号了，拖到头为止
+  var MAIN_MIN = 360;          // 不管怎么拖，正文那一栏至少留这么宽
+  var paneUser = { left: null, right: null };   // 用户拖出来的宽度；null = 用样式表里的默认值
+  function paneVar(which) { return which === 'left' ? '--left-w' : '--right-w'; }
+  function paneCur(which) {
+    return parseFloat(getComputedStyle(document.documentElement).getPropertyValue(paneVar(which))) || 0;
+  }
+  /* 上限由当下可用宽度决定：另一栏还占着多少、正文最少留多少，剩下的才是这一栏的 */
+  function paneMax(which) {
+    var other = which === 'left'
+      ? (state.rightOpen ? paneCur('right') : 0)
+      : (state.leftOpen ? paneCur('left') : 0);
+    return Math.max(PANE_MIN, window.innerWidth - other - MAIN_MIN);
+  }
+  function paneClamp(which, w) {
+    var max = paneMax(which);
+    return Math.max(Math.min(PANE_MIN, max), Math.min(w, max));
+  }
+  function paneApply(which) {
+    if (paneUser[which] === null) document.documentElement.style.removeProperty(paneVar(which));
+    else document.documentElement.style.setProperty(paneVar(which), paneClamp(which, paneUser[which]) + 'px');
+  }
+  function paneSave(which) {
+    try {
+      if (paneUser[which] === null) localStorage.removeItem('mdv-' + which + '-w');
+      else localStorage.setItem('mdv-' + which + '-w', String(Math.round(paneUser[which])));
+    } catch (e) {}
+  }
+  function paneLoad() {
+    ['left', 'right'].forEach(function (which) {
+      try {
+        var n = Number(localStorage.getItem('mdv-' + which + '-w'));
+        paneUser[which] = n >= PANE_MIN ? n : null;   // 没存过（NaN / 0）就回到样式表默认值
+      } catch (e) {}
+      paneApply(which);
+    });
+  }
+  function initPaneSplits() {
+    [['splitL', 'left'], ['splitR', 'right']].forEach(function (pair) {
+      var el = $(pair[0]), which = pair[1];
+      var dragging = false, startW = 0, startX = 0;
+      el.addEventListener('pointerdown', function (e) {
+        if (e.button !== 0) return;
+        dragging = true;
+        startW = paneCur(which);
+        startX = e.clientX;
+        el.setPointerCapture(e.pointerId);
+        el.classList.add('p-holding');
+        document.body.classList.add('pane-dragging');
+        e.preventDefault();
+      });
+      el.addEventListener('pointermove', function (e) {
+        if (!dragging) return;
+        var d = e.clientX - startX;
+        // 右栏从分割条一直铺到屏幕右边，所以指针往右走 = 右栏变窄
+        paneUser[which] = paneClamp(which, startW + (which === 'left' ? d : -d));
+        paneApply(which);
+      });
+      function stop(e) {
+        if (!dragging) return;
+        dragging = false;
+        try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+        el.classList.remove('p-holding');
+        document.body.classList.remove('pane-dragging');
+        paneSave(which);                // 松手才落盘，拖一路存一路没必要
+        tipItems($('tree'));            // 栏宽变了，索引项是否截断也跟着变
+      }
+      el.addEventListener('pointerup', stop);
+      el.addEventListener('pointercancel', stop);
+      el.addEventListener('dblclick', function () {
+        paneUser[which] = null; paneApply(which); paneSave(which);   // 双击 = 回到样式表默认宽度
+      });
+    });
+    /* 窗口变小后把拖出来的宽度压回可用范围；窗口再变大时按记住的值恢复 */
+    var tipTimer = 0;
+    window.addEventListener('resize', function () {
+      paneApply('left'); paneApply('right');
+      clearTimeout(tipTimer);
+      tipTimer = setTimeout(function () { tipItems($('tree')); }, 150);
+    });
   }
 
   /* ---------- 正文宽度：抓正文左右边缘的感应条，向哪边拖都对称变宽变窄 ---------- */
@@ -577,6 +663,17 @@
     hits.sort(function (a, b) { return (b.nameHit - a.nameHit) || (b.count - a.count); });
     return hits;
   }
+  /* 索引项的 tooltip 只在文字真被省略号截断时才挂 title：悬停能看全，
+     没截断就不弹一个和眼前内容一模一样的提示。文本由 data-tip 预先备好。 */
+  function tipItems(root) {
+    [].forEach.call(root.querySelectorAll('[data-tip]'), function (el) {
+      var cut = [].some.call(el.querySelectorAll('.t,.s'), function (n) {
+        return n.scrollWidth > n.clientWidth + 1;
+      });
+      if (cut) el.setAttribute('title', el.getAttribute('data-tip'));
+      else el.removeAttribute('title');
+    });
+  }
   function renderSidebar() {
     var q = $('search').value;
     var tree = $('tree');
@@ -592,13 +689,16 @@
       }
       var h = '<div class="dir">搜索结果 <span class="n">' + hits.length + ' 篇</span></div>';
       hits.forEach(function (r) {
+        var tip = r.doc.title + (r.count ? ' · ' + r.count + ' 处命中' : ' · 文件名命中') +
+          '\n' + dispPath(r.doc.path);
         h += '<a class="docitem' + (state.current && state.current.path === r.doc.path ? ' active' : '') +
-          '" href="' + docHref(r.doc.path) + '">' +
+          '" href="' + docHref(r.doc.path) + '" data-tip="' + esc(tip) + '">' +
           '<span class="t">' + esc(r.doc.title) +
           (r.count ? ' <span class="hit">' + r.count + ' 处</span>' : '') + '</span>' +
           '<span class="s">' + esc(r.snippet || dispPath(r.doc.path)) + '</span></a>';
       });
       tree.innerHTML = h;
+      tipItems(tree);
       return;
     }
 
@@ -637,56 +737,67 @@
   /* ==================================================================
      全文搜索（顶栏搜索条 → 正文区结果页）
      - 范围：启动时导入的全部文档原文（含 config 里 hidden 的），大小写不敏感
-     - 结果按文档分组，每条给出「所在章节 + 命中行 ±1 行上下文 + 行号」
-     - 点结果：#p=…&h=…&q=…&k=…，正文里所有命中处标 <mark>，滚到这一条那一处
-     - 匹配按行做，所以跨行的短语不算命中（输入框本身就是单行）
+     - 语法见 Core.parseSearchQuery：空格/|| 是「或」，&& 是「与」，! 是「非」；
+       搜索条最前面的 .* 按钮切换正则模式
+     - 判定按文档：AND 的两个词可以落在不同的行；NOT 要求整篇都不出现
+     - 结果仍按行列出（命中行 ±1 行上下文 + 行号），按文档分组
+     - 点结果：#p=…&h=…&q=…&k=…（正则再带 re=1），正文里所有正向词标 <mark>
+     - 单行内仍要求连续匹配：跨行的短语不算命中（输入框本身就是单行）
      ================================================================== */
   var SR_MAX_PER_DOC = 40;    // 单篇最多列出多少处
   var SR_MAX_TOTAL = 400;     // 整页最多列出多少处
   var SR_CTX_CHARS = 150;     // 上下文每行截断长度
   var XHTML = 'http://www.w3.org/1999/xhtml';
 
-  function searchHref(path, q, occ, section) {
+  function searchHref(path, q, occ, section, reMode) {
     return '#p=' + enc(path) + (section ? '&h=' + enc(section) : '') +
-      '&q=' + enc(q) + '&k=' + occ;
+      '&q=' + enc(q) + '&k=' + occ + (reMode ? '&re=1' : '');
   }
 
-  function searchAll(qraw) {
-    var raw = String(qraw || '').trim();
-    var q = raw.toLowerCase();
-    if (!q) return null;
+  function searchAll(qraw, reMode) {
+    var spec = Core.parseSearchQuery(qraw, !!reMode);
+    if (spec.empty) return null;
+    var res = {
+      raw: spec.raw, mode: spec.mode, reMode: !!reMode, spec: spec,
+      error: spec.error, groups: [], docs: 0, all: 0, shown: 0
+    };
+    if (spec.error) return res;
     var groups = [], all = 0, shown = 0;
     state.docs.forEach(function (doc, order) {
       var lines = String(doc.text || '').replace(/\r\n?/g, '\n').split('\n');
       var decls = docRefs(doc).lineSet;              // 文首声明行不进正文，搜它只会跳不到地方
-      var heads = Core.scanHeadings(lines.join('\n'), htmlMode());
-      var hits = [], hi = 0, sec = null, occ = 0;
+      var body = lines.map(function (ln, i) { return decls[i] ? '' : ln; });
+      var act = Core.searchActiveTerms(spec, body);   // 文档级判定：同时决定要列/高亮哪些词
+      if (!act) return;
+      var heads = Core.scanHeadings(body.join('\n'), htmlMode());
+      var hits = [], total = 0, hi = 0, sec = null, occ = 0;
       for (var i = 0; i < lines.length; i++) {
         while (hi < heads.length && heads[hi].line <= i) { sec = heads[hi]; hi++; }
         if (decls[i]) continue;
-        var low = lines[i].toLowerCase(), at = low.indexOf(q);
-        while (at >= 0) {
-          all++;
-          if (shown < SR_MAX_TOTAL && hits.length < SR_MAX_PER_DOC) {
-            hits.push({
-              line: i, col: at, occ: occ, sec: sec, text: lines[i],
-              before: i > 0 && !decls[i - 1] ? lines[i - 1] : '',
-              after: i + 1 < lines.length && !decls[i + 1] ? lines[i + 1] : ''
-            });
-            shown++;
-          }
-          occ++;
-          at = low.indexOf(q, at + q.length);
+        var ms = Core.searchScanLine(body[i], act);
+        if (!ms.length) continue;
+        total++;
+        if (shown < SR_MAX_TOTAL && hits.length < SR_MAX_PER_DOC) {
+          hits.push({
+            line: i, col: ms[0].start, occ: occ, sec: sec, text: lines[i],
+            before: i > 0 && !decls[i - 1] ? lines[i - 1] : '',
+            after: i + 1 < lines.length && !decls[i + 1] ? lines[i + 1] : ''
+          });
+          shown++;
         }
+        occ += ms.length;       // 本行所有正向命中占的序号；条目指向第一个
       }
-      if (hits.length) groups.push({
-        doc: doc, hits: hits, all: occ, order: order,
+      if (!total) return;
+      all += total;
+      groups.push({
+        doc: doc, hits: hits, all: total, order: order, spec: act,
         graphic: isMindmapDoc(doc),   // 整篇画成图的文档（.mermaid）没法在正文里定位
-        nameHit: String(doc.title || '').toLowerCase().indexOf(q) >= 0
+        nameHit: Core.searchScanLine(String(doc.title || ''), act).length > 0
       });
     });
     groups.sort(function (a, b) { return (b.nameHit - a.nameHit) || (a.order - b.order); });
-    return { raw: raw, q: q, groups: groups, docs: groups.length, all: all, shown: shown };
+    res.groups = groups; res.docs = groups.length; res.all = all; res.shown = shown;
+    return res;
   }
 
   /* 截断一行的显示宽度：命中位置太靠后时改成「以命中处为中心开窗」，别把命中截没了 */
@@ -700,44 +811,57 @@
     }
     return s.slice(0, SR_CTX_CHARS) + '…';
   }
-  /* 先按原文找到命中处，再逐段转义拼接：先转义会打乱偏移 */
-  function srMark(s, q) {
-    var low = String(s).toLowerCase(), at = low.indexOf(q), pos = 0, out = '';
-    while (at >= 0) {
-      out += esc(String(s).slice(pos, at)) + '<mark>' + esc(String(s).slice(at, at + q.length)) + '</mark>';
-      pos = at + q.length; at = low.indexOf(q, pos);
-    }
-    return out + esc(String(s).slice(pos));
+  /* 先按原文找到命中处，再逐段转义拼接：先转义会打乱偏移。
+     spec 是该文档筛过的正向词集合（或正则），NOT 词不标。 */
+  function srMark(s, spec) {
+    s = String(s == null ? '' : s);
+    var ms = Core.searchScanLine(s, spec), pos = 0, out = '';
+    ms.forEach(function (m) {
+      out += esc(s.slice(pos, m.start)) + '<mark>' + esc(s.slice(m.start, m.end)) + '</mark>';
+      pos = m.end;
+    });
+    return out + esc(s.slice(pos));
   }
 
-  function renderSearchPage(qraw) {
+  function renderSearchPage(qraw, reMode) {
     var q = String(qraw || '').trim();
+    var re = !!reMode;
     state.current = null;
     state.mindmap = null; state.diagram = null; state.headings = [];
     exitMindmapFullscreen();
     exitMermaidFullscreen();
     applyConfig();
-    $('docPath').textContent = q ? '全文搜索：' + q : '全文搜索';
+    $('docPath').textContent = q ? (re ? '正则搜索：' : '全文搜索：') + q : '全文搜索';
     $('tocList').innerHTML = '<li class="toc-empty">搜索结果页没有本篇目录</li>';
     $('prevBtn').disabled = true; $('nextBtn').disabled = true;
     document.title = (q ? q + ' · 搜索' : '搜索') + (state.cfg.subtitle ? ' ' + state.cfg.subtitle : '');
 
-    var res = q ? searchAll(q) : null;
+    var res = q ? searchAll(q, re) : null;
     var html = '<div class="search-page"><h1>搜索结果</h1>' +
       '<div class="meta">' +
       '<span>关键词 <code>' + esc(q || '（空）') + '</code></span>' +
-      (res ? '<span>' + res.all + ' 处命中 · ' + res.docs + ' 篇文档</span>' : '') +
+      (re ? '<span class="sr-mode">正则表达式</span>' : '') +
+      (res && !res.error ? '<span>' + res.all + ' 处命中 · ' + res.docs + ' 篇文档</span>' : '') +
       '<span class="no-print">范围：启动时导入的 ' + state.docs.length + ' 篇文档</span>' +
       '<span class="no-print">点任意一条跳到正文里的命中处</span></div>';
     if (!res) {
-      html += '<div class="empty">在上面的搜索条里输入内容，回车或点右侧的放大镜开始搜索。</div>';
+      html += '<div class="empty">在上面的搜索条里输入内容，回车或点右侧的放大镜开始搜索。<br>' +
+        '语法：空格或 <code>||</code> 表示「或」，<code>&amp;&amp;</code> 表示「与」，<code>!</code> 表示排除；' +
+        '开头的 <code>.*</code> 按钮切换正则。</div>';
+    } else if (res.error) {
+      html += '<div class="notice">' + esc(res.error) + '</div>' +
+        '<div class="empty">修好查询后重新回车搜索；点顶栏放大镜可以回来改。</div>';
     } else if (!res.groups.length) {
-      html += '<div class="empty">没有匹配「' + esc(q) + '」的内容。<br>' +
-        '搜索不区分大小写，但只在同一行内匹配，且只覆盖导入的 Markdown / 思维导图文档正文。</div>';
+      html += '<div class="empty">' +
+        (re ? '正则没有匹配的内容。<br>正则仍按行匹配（跨行写法不会命中），不区分大小写。'
+          : '没有匹配「' + esc(q) + '」的内容。<br>' +
+            '搜索不区分大小写；<code>&amp;&amp;</code> 的两个词可以出现在同一篇的不同行，' +
+            '<code>!</code> 要求整篇都不出现。') +
+        '</div>';
     } else {
       if (res.all > res.shown) {
         html += '<div class="notice">命中太多，只列出前 ' + res.shown + ' 处（共 ' + res.all +
-          ' 处）。换个更长的关键词试试。</div>';
+          ' 处）。换个更长的关键词，或加 <code>&amp;&amp;</code> 缩小范围。</div>';
       }
       res.groups.forEach(function (g, gi) {
         html += '<section class="sr-group" id="sr-g-' + gi + '"><div class="sr-head">' +
@@ -746,14 +870,14 @@
           (g.graphic ? '<span class="sr-graph" title="整篇画成图，点开只能打开文档，定位不到命中处">图形文档 · 不定位</span>' : '') +
           '<span class="sr-n">' + g.all + ' 处</span></div>';
         g.hits.forEach(function (h) {
-          var href = g.graphic ? docHref(g.doc.path) : searchHref(g.doc.path, q, h.occ, h.sec && h.sec.id);
+          var href = g.graphic ? docHref(g.doc.path) : searchHref(g.doc.path, q, h.occ, h.sec && h.sec.id, re);
           html += '<a class="sr-item" href="' + href + '">' +
             '<span class="sr-sec">' + esc(h.sec ? Core.plain(h.sec.text, htmlMode()) : '文档开头') +
             '<span class="sr-ln">第 ' + (h.line + 1) + ' 行</span></span>' +
             '<span class="sr-ctx">' +
-            (h.before ? '<i>' + srMark(srCut(h.before), res.q) + '</i>' : '') +
-            '<b>' + srMark(srCut(h.text, h.col), res.q) + '</b>' +
-            (h.after ? '<i>' + srMark(srCut(h.after), res.q) + '</i>' : '') +
+            (h.before ? '<i>' + srMark(srCut(h.before), g.spec) + '</i>' : '') +
+            '<b>' + srMark(srCut(h.text, h.col), g.spec) + '</b>' +
+            (h.after ? '<i>' + srMark(srCut(h.after), g.spec) + '</i>' : '') +
             '</span></a>';
         });
         if (g.all > g.hits.length) {
@@ -776,16 +900,20 @@
     $('sidebarTitle').textContent = '搜索结果导航';
     if (!res) {
       tree.innerHTML = '<div class="empty">还没输入关键词。</div>';
+    } else if (res.error) {
+      tree.innerHTML = '<div class="empty">查询有误，见正文提示。</div>';
     } else if (!res.groups.length) {
       tree.innerHTML = '<div class="empty">没有匹配的文档。</div>';
     } else {
       var h = '<div class="dir">命中文件<span class="n">' + res.groups.length + ' 篇 · ' + res.all + ' 处</span></div>';
       res.groups.forEach(function (g, gi) {
-        h += '<button type="button" class="docitem sr-nav" data-g="sr-g-' + gi + '">' +
+        var tip = g.doc.title + ' · ' + g.all + ' 处命中\n' + dispPath(g.doc.path);
+        h += '<button type="button" class="docitem sr-nav" data-g="sr-g-' + gi + '" data-tip="' + esc(tip) + '">' +
           '<span class="t">' + esc(g.doc.title) + ' <span class="hit">' + g.all + ' 处</span></span>' +
           '<span class="s">' + esc(dispPath(g.doc.path)) + '</span></button>';
       });
       tree.innerHTML = h;
+      tipItems(tree);
       borrowLeftPane();          // 有东西可导航才把左栏借出来
     }
     $('sidebar').scrollTop = 0;
@@ -805,33 +933,34 @@
 
   /* ---------- 页内命中高亮与跳转 ---------- */
   var HIT_SKIP = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, NOSCRIPT: 1, HEAD: 1, MARK: 1 };
-  function highlightHits(root, q) {
-    var low = String(q || '').toLowerCase();
-    if (!low) return [];
+  function highlightHits(root, spec) {
+    if (!spec || spec.error || spec.empty) return [];
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: function (n) {
-        if (!n.nodeValue || n.nodeValue.toLowerCase().indexOf(low) < 0) return NodeFilter.FILTER_REJECT;
+        if (!n.nodeValue) return NodeFilter.FILTER_REJECT;
         for (var p = n.parentElement; p && p !== root; p = p.parentElement) {
           if (p.namespaceURI !== XHTML) return NodeFilter.FILTER_REJECT;   // svg 里的文字包不出 mark
           if (HIT_SKIP[String(p.tagName).toUpperCase()]) return NodeFilter.FILTER_REJECT;
         }
-        return NodeFilter.FILTER_ACCEPT;
+        return Core.searchScanLine(n.nodeValue, spec).length
+          ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       }
     });
     var nodes = [], n;
     while ((n = walker.nextNode())) nodes.push(n);
     var marks = [];
     nodes.forEach(function (tn) {
-      var text = tn.nodeValue, lt = text.toLowerCase(), at = lt.indexOf(low), pos = 0;
+      var text = tn.nodeValue, ms = Core.searchScanLine(text, spec), pos = 0;
+      if (!ms.length) return;
       var frag = document.createDocumentFragment();
-      while (at >= 0) {
-        if (at > pos) frag.appendChild(document.createTextNode(text.slice(pos, at)));
+      ms.forEach(function (m) {
+        if (m.start > pos) frag.appendChild(document.createTextNode(text.slice(pos, m.start)));
         var mk = document.createElement('mark');
         mk.className = 'sr-hit';
-        mk.textContent = text.slice(at, at + low.length);
+        mk.textContent = text.slice(m.start, m.end);
         frag.appendChild(mk); marks.push(mk);
-        pos = at + low.length; at = lt.indexOf(low, pos);
-      }
+        pos = m.end;
+      });
       if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
       if (tn.parentNode) tn.parentNode.replaceChild(frag, tn);
     });
@@ -850,8 +979,15 @@
   }
   /* 跳到第 occ 处命中。序号是「源码里的第几处」，正文里的顺序通常一致，
      但命中落在被图形替换掉的围栏里时会对不上 —— 所以知道章节就先按章节取第一处。 */
-  function jumpToMatch(q, occ, section) {
-    var marks = highlightHits($('article'), q);
+  function jumpToMatch(jump, section) {
+    var doc = state.current, act = null;
+    if (doc && jump && jump.spec) {
+      var lines = String(doc.text || '').replace(/\r\n?/g, '\n').split('\n');
+      var decls = docRefs(doc).lineSet;
+      // 用和结果页完全相同的口径筛一遍正向词，序号才对得上（NOT 词不进高亮）
+      act = Core.searchActiveTerms(jump.spec, lines.map(function (ln, i) { return decls[i] ? '' : ln; }));
+    }
+    var marks = act ? highlightHits($('article'), act) : [];
     if (!marks.length) return false;
     // 命中可能落在被折叠起来的源码块里，滚过去也看不见：只在看得见的那些里挑
     var vis = marks.filter(function (m) { return m.offsetParent !== null; });
@@ -863,7 +999,7 @@
           (anchor.compareDocumentPosition(vis[i]) & Node.DOCUMENT_POSITION_FOLLOWING)) { el = vis[i]; break; }
       }
     }
-    if (!el) el = vis[Math.max(0, Math.min(Number(occ) || 0, vis.length - 1))] || marks[0];
+    if (!el) el = vis[Math.max(0, Math.min(Number(jump.occ) || 0, vis.length - 1))] || marks[0];
     el.className += ' sr-cur';
     if (el.offsetParent === null) return false;    // 一处都看不见：退回按章节定位
     el.scrollIntoView({ block: 'center' });
@@ -967,7 +1103,7 @@
     $('nextBtn').disabled = idx < 0 || idx >= state.visible.length - 1;
 
     requestAnimationFrame(function () {
-      if (!(jump && jump.q && jumpToMatch(jump.q, jump.occ, section))) {
+      if (!(jump && jump.spec && jumpToMatch(jump, section))) {
         var el = section ? document.getElementById(section) : null;
         if (el) { el.scrollIntoView({ block: 'start' }); flashEl(el); }
         else window.scrollTo(0, 0);
@@ -2037,17 +2173,22 @@
   function route() {
     var h = parseHash();
     syncBarWithEntry();               // 开合跟着历史条目走，分支里不再改它
+    var reMode = h.re === '1';
     if (h.p && state.byPath[h.p]) {
       state.view = 'doc';
       returnLeftPane();
-      var jump = h.q ? { q: h.q, occ: Number(h.k) || 0 } : null;
-      if (jump) fillSearchBar(jump.q);
+      var jump = null;
+      if (h.q) {
+        var qspec = Core.parseSearchQuery(h.q, reMode);
+        if (!qspec.error && !qspec.empty) jump = { spec: qspec, occ: Number(h.k) || 0 };
+        fillSearchBar(h.q, reMode);
+      }
       if (isMindmapDoc(state.byPath[h.p])) renderMindmapDoc(state.byPath[h.p]);
       else renderDoc(h.p, h.h || null, jump);
     } else if (h.s !== undefined) {
       state.view = 'search';
-      fillSearchBar(h.s);
-      renderSearchPage(h.s);
+      fillSearchBar(h.s, reMode);
+      renderSearchPage(h.s, reMode);
     } else {
       state.view = 'home';
       returnLeftPane();
@@ -2061,6 +2202,10 @@
   };
   $('printBtn').onclick = function () { window.print(); };
   /* ---------- 顶栏搜索条 ---------- */
+  var SEARCH_PLACEHOLDER = {
+    text: '搜索全部文档：空格＝或，&& 与，! 非（回车 · Esc）',
+    regex: '正则表达式模式：整串按 JS 正则匹配（按行、不区分大小写）；说明见「帮助 → 正则表达式」'
+  };
   function searchBarOpen() { return document.body.classList.contains('search-open'); }
   /* 开合、首页滚动位置都是「这一条历史记录」的状态，不是全局的：记在 history.state 里，
      前进 / 后退回到哪一条就还原成那条当初的样子。合并写回，别把同一条上的其它状态顶掉。 */
@@ -2093,23 +2238,55 @@
     if (history.state && typeof history.state.sb === 'number') setSearchBar(!!history.state.sb, false);
     else recordBar(searchBarOpen());  // 点链接 / 改 hash 开出来的新条目：沿用屏上现状并补记
   }
-  function fillSearchBar(q) {         // 从地址栏回填输入内容，不动开合
-    $('topSearch').value = String(q || '');
+  function fillSearchBar(q, reMode) {  // 从地址栏回填输入内容和模式，不动开合
+    var el = $('topSearch');
+    el.value = String(q || '');
+    setRegexMode(!!reMode);
+    var spec = Core.parseSearchQuery(q, !!reMode);
+    el.classList.toggle('bad', !!spec.error);
+    if (spec.error) el.setAttribute('aria-invalid', 'true');
+    else el.removeAttribute('aria-invalid');
+  }
+  function setRegexMode(on) {
+    state.regexMode = !!on;
+    var b = $('regexBtn');
+    b.setAttribute('aria-pressed', String(!!on));
+    b.title = on ? '正则表达式模式：开（Alt+R 切换）' : '正则表达式模式：关（Alt+R 切换）';
+    $('topSearch').placeholder = on ? SEARCH_PLACEHOLDER.regex : SEARCH_PLACEHOLDER.text;
   }
   $('searchBtn').onclick = function () { setSearchBar(!searchBarOpen()); };
+  $('regexBtn').onclick = function () {
+    setRegexMode(!state.regexMode);
+    $('topSearch').focus();
+  };
   $('searchBar').onsubmit = function (e) {
     e.preventDefault();
-    location.hash = '#s=' + enc($('topSearch').value.trim());
+    location.hash = '#s=' + enc($('topSearch').value.trim()) + (state.regexMode ? '&re=1' : '');
     setSearchBar(false);        // 同关键词重复提交不触发 hashchange，这里无条件收一次
   };
   $('topClear').onclick = function () {
-    $('topSearch').value = '';
+    var el = $('topSearch');
+    el.value = '';
+    el.classList.remove('bad');
+    el.removeAttribute('aria-invalid');
     clearHits();
-    $('topSearch').focus();
+    el.focus();
+  };
+  $('topSearch').oninput = function () {
+    this.classList.remove('bad');
+    this.removeAttribute('aria-invalid');
   };
   $('topSearch').onkeydown = function (e) {
     if (e.key === 'Escape') { e.preventDefault(); setSearchBar(false); }
   };
+  /* 输入为空时点页面其它地方收起搜索条；有内容就不打扰，免得误点一下丢掉关键词。
+     放大镜按钮本身不算「其它地方」：它在 click 里自己开合，pointerdown 先收会变成关了又开。 */
+  document.addEventListener('pointerdown', function (e) {
+    if (!searchBarOpen()) return;
+    if ($('searchBar').contains(e.target) || $('searchBtn').contains(e.target)) return;
+    if ($('topSearch').value.trim()) return;
+    setSearchBar(false);
+  }, true);
   $('linkBtn').onclick = function () {
     var btn = this;
     var done = function () {
@@ -2163,16 +2340,155 @@
     if (brandMenuOpen() && !brandWrap.contains(e.relatedTarget)) setBrandMenu(false);
   });
 
+  /* ---------- 帮助对话框：顶部页签 + help/*.md 整篇渲染 ---------- */
+  var helpData = { pages: null, current: 0, built: false };
+  function helpPages() {
+    if (helpData.pages) return helpData.pages;
+    helpData.pages = [];
+    try {
+      var list = JSON.parse($('help-docs').textContent || '[]');
+      if (Array.isArray(list)) {
+        helpData.pages = list.filter(function (p) { return p && typeof p.md === 'string'; });
+      }
+    } catch (e) {}
+    return helpData.pages;
+  }
+  function renderHelpMd(md) {
+    var res = Core.render(String(md), {
+      html: 'escape', docPath: '',
+      docHref: function () { return '#'; },
+      resolveDoc: function () { return null; },
+      resolveAsset: function (src) { return src; }
+    });
+    var box = document.createElement('div');
+    box.innerHTML = res.html;
+    /* 标题前的 # 锚点是给文档路由用的；帮助页不参与路由，去掉免得点出一次 hashchange */
+    [].forEach.call(box.querySelectorAll('a.anchor'), function (a) {
+      a.parentNode.removeChild(a);
+    });
+    return box.innerHTML;
+  }
+  function helpTabEls() { return [].slice.call($('helpTabs').querySelectorAll('.help-tab')); }
+  function helpPanelEls() { return [].slice.call($('helpPages').querySelectorAll('.help-page')); }
+  function selectHelpTab(i, focus) {
+    var tabs = helpTabEls(), panels = helpPanelEls();
+    if (!tabs.length) return;
+    i = Math.max(0, Math.min(i, tabs.length - 1));
+    helpData.current = i;
+    tabs.forEach(function (t, n) {
+      var on = n === i;
+      t.setAttribute('aria-selected', String(on));
+      t.tabIndex = on ? 0 : -1;
+      if (panels[n]) panels[n].hidden = !on;
+    });
+    if (focus) tabs[i].focus();
+    $('helpDialog').querySelector('.dlg-body').scrollTop = 0;
+  }
+  function initHelp() {
+    if (helpData.built) return;
+    helpData.built = true;
+    var pages = helpPages();
+    var tabs = $('helpTabs'), body = $('helpPages');
+    if (!pages.length) {
+      body.innerHTML = '<p class="help-md">帮助内容缺失：构建时没有读到 help/*.md。</p>';
+      return;
+    }
+    pages.forEach(function (p, i) {
+      var tabId = 'helpTab' + i, panelId = 'helpPage' + i;
+      var tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 'help-tab';
+      tab.id = tabId;
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-controls', panelId);
+      tab.setAttribute('aria-selected', 'false');
+      tab.tabIndex = -1;
+      tab.textContent = p.title || ('帮助 ' + (i + 1));
+      tabs.appendChild(tab);
+
+      var panel = document.createElement('section');
+      panel.className = 'help-page article help-md';
+      panel.id = panelId;
+      panel.setAttribute('role', 'tabpanel');
+      panel.setAttribute('aria-labelledby', tabId);
+      panel.hidden = true;
+      try { panel.innerHTML = renderHelpMd(p.md); }
+      catch (e) { panel.innerHTML = '<p>帮助内容渲染失败：' + esc(e.message) + '</p>'; }
+      body.appendChild(panel);
+    });
+    selectHelpTab(Math.min(helpData.current, pages.length - 1), false);
+  }
+  $('helpTabs').addEventListener('click', function (e) {
+    var tab = e.target && e.target.closest ? e.target.closest('.help-tab') : null;
+    if (!tab) return;
+    selectHelpTab(helpTabEls().indexOf(tab), false);
+  });
+  /* 页签的键盘操作：方向键在标签间折返，Home / End 跳首尾 */
+  $('helpTabs').addEventListener('keydown', function (e) {
+    var tabs = helpTabEls(), i = tabs.indexOf(document.activeElement);
+    if (i < 0) return;
+    var next = null;
+    if (e.key === 'ArrowRight') next = (i + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft') next = (i + tabs.length - 1) % tabs.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = tabs.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    selectHelpTab(next, true);
+  });
+
+  /* 尺寸记忆：只在拖右下角松手时写一次，窗口缩小时的临时压缩不会覆盖记住的大小 */
+  var HELP_SIZE_KEY = 'mdv-help-size';
+  var helpResizing = false;
+  function readHelpSize() {
+    try {
+      var s = JSON.parse(localStorage.getItem(HELP_SIZE_KEY) || 'null');
+      return s && s.w > 0 && s.h > 0 ? s : null;
+    } catch (e) { return null; }
+  }
+  function applyHelpSize() {
+    var dlg = $('helpDialog'), s = readHelpSize();
+    if (!s) return;
+    dlg.style.width = s.w + 'px';
+    dlg.style.height = s.h + 'px';
+  }
+  function saveHelpSize() {
+    var dlg = $('helpDialog');
+    if (!dlg.open) return;
+    try {
+      localStorage.setItem(HELP_SIZE_KEY, JSON.stringify({ w: dlg.offsetWidth, h: dlg.offsetHeight }));
+    } catch (e) {}
+  }
+  $('helpDialog').addEventListener('pointerdown', function (e) {
+    var r = this.getBoundingClientRect();
+    helpResizing = e.clientX >= r.right - 22 && e.clientY >= r.bottom - 22;
+  });
+  window.addEventListener('pointerup', function () {
+    if (!helpResizing) return;
+    helpResizing = false;
+    saveHelpSize();
+  });
+  window.addEventListener('pointercancel', function () { helpResizing = false; });
+
   function openDialog(id) {
     setBrandMenu(false);
+    if (id === 'helpDialog') { initHelp(); applyHelpSize(); }
     $(id).showModal();
   }
   [].forEach.call(document.querySelectorAll('.dlg'), function (dlg) {
     [].forEach.call(dlg.querySelectorAll('[data-close]'), function (btn) {
       btn.onclick = function () { dlg.close(); };
     });
-    /* click 落在 dialog 元素自身（而不是里面的块）= 点在内容盒之外的留白/背景 */
-    dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+    /* click 落在 dialog 元素自身（而不是里面的块）= 点在内容盒之外的留白/背景。
+       帮助框右下角是原生 resize 手柄，拖完松手会补一个 click，别把它当成背景关掉。 */
+    dlg.addEventListener('click', function (e) {
+      if (e.target !== dlg) return;
+      if (dlg.id === 'helpDialog') {
+        var r = dlg.getBoundingClientRect();
+        if (e.clientX >= r.right - 22 && e.clientY >= r.bottom - 22) return;
+      }
+      dlg.close();
+    });
   });
   $('helpMenuItem').onclick = function () { openDialog('helpDialog'); };
   $('aboutMenuItem').onclick = function () { fillAbout(); openDialog('aboutDialog'); };
@@ -2287,6 +2603,15 @@
     }).catch(function () {});
   }
   document.addEventListener('keydown', function (e) {
+    /* Alt+R：切换正则模式并展开搜索条。放在输入框提前返回之前，
+       否则在搜索框里按就没反应了；模态框开着时不抢。 */
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'r' || e.key === 'R') &&
+      !document.querySelector('dialog[open]')) {
+      e.preventDefault();
+      setRegexMode(!state.regexMode);
+      setSearchBar(true);
+      return;
+    }
     var tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea') return;
     // 模态框开着：`[` `]` `/` 不该去动背后的页面，Esc 也交给 <dialog> 自己处理
@@ -2366,6 +2691,8 @@
     rerenderMermaid: rerenderMermaid,
     /* 全文搜索：结果数、页内命中高亮、当前定位到的那一处、搜索条状态 */
     searchAll: searchAll,
+    parseSearch: Core.parseSearchQuery,
+    searchMode: function () { return state.regexMode; },
     searchHits: function () { return $('article').querySelectorAll('mark.sr-hit').length; },
     currentHit: function () { var m = $('article').querySelector('mark.sr-cur'); return m ? m.textContent : null; },
     searchBarOpen: searchBarOpen,
@@ -2390,8 +2717,10 @@
   (async function main() {
     await loadConfig();
     cwLoad();
+    paneLoad();                 // 本地记住的左右栏宽度先落到 --left-w/--right-w 上
     applyConfig();
     loadLayout();
+    initPaneSplits();
     initWidthEdges();
     enableMotion();
     state.docs = await loadDocs();

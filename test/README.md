@@ -8,6 +8,7 @@
 | 脚本 | 作用 | 命令 |
 | --- | --- | --- |
 | `verify-render.mjs` | 渲染器回归。读 `assets/md-core.js`（页面外链的渲染器源码），渲染 `docs/` 与 `test/fixtures/` 下全部 markdown，与独立写的源码扫描器交叉验证，并对每个表格逐格比对 | `node test/verify-render.mjs` |
+| `verify-search.mjs` | 搜索查询语法回归。读 `assets/md-core.js` 的三个纯函数：空格/`\|\|` 或、`&&` 与、`!` 非、反斜杠转义、正则模式与错误提示、单行命中重叠合并、以及文档级判定（AND 可跨行、NOT 要求整篇没有） | `node test/verify-search.mjs` |
 | `verify-mindmap.mjs` | 思维导图解析回归。读 `assets/mindmap-core.js`，对 `docs/**/*.mermaid` 与 `test/fixtures/mindmap/*.mermaid` 验证层级、形状、tab/CRLF/注释边界、Markdown 转义，并用独立写的缩进扫描器交叉验证节点数与层数；`.mermaid` 里写成 `stateDiagram-v2` 这类别的版式的文件会被识别出来、交给 Mermaid 那条路（不做导图断言） | `node test/verify-mindmap.mjs` |
 | `verify-mermaid.mjs` | 嵌入 Mermaid 图表回归。读 `assets/mermaid-core.js` 与 `assets/md-core.js`：围栏识别（大小写、`~~~`、`{.mermaid}`、附加信息串、`mermaidfoo` 不认）、版式判定（先长后短、跳过注释/`%%{init}%%`/前置配置块）、块标记与工具栏开关、源码 HTML 转义后能逐字还原、`normalize` 的 BOM/CRLF/缩进处理、md-core 的接线（传与不传 `ctx.mermaid` 两条路）、`test/fixtures/mermaid/*.md` 逐条跑、以及产物里引擎是否按需内联 | `node test/verify-mermaid.mjs` |
 | `check-snapshot.mjs` | 产物完整性：内置快照可解析、`</script>` 已转义、条目字段齐全（含 `kind`）、思维导图正文有 `mindmap` 声明（整篇图表的 `.mermaid` 例外）、索引不带正文且与快照一致、引擎块「内联 / `data-disabled` / `data-unused`」三种状态都合法、`assets/` 外链脚本存在 | `node test/check-snapshot.mjs` |
@@ -19,7 +20,7 @@
 | `serve-host.mjs` | 监听地址回归：默认只绑 `127.0.0.1`（本机 IP 连不上、也不打印局域网地址）、`--lan` 真的绑到所有网卡（从本机 IP 回连成功并打印该地址）、`--host <本机IP>` 只绑这个地址、`--host <不存在的地址>` 立刻报错退出 | `node test/serve-host.mjs` |
 | `serve-port.mjs` | 端口顺延回归：端口被占用（含 Windows 上被独占监听、即报 `EACCES` 的情况）必须顺延并在启动信息里印真实端口，**不许再把它说成「小于 1024 需要管理员权限」**；`--port 80` 这类特权端口要么明确报权限、要么真能绑，不许静默顺延；Windows 的系统预留端口段（`netsh excludedportrange`）顺延不动时须报「连续 N 个端口都绑不上」 | `node test/serve-port.mjs` |
 
-以上十一个纯 Node 脚本就是 `npm test`（会先跑一次 `node build-docs.mjs` 保证产物是新的）。改动 `page.template.html`、`assets/` 下的样式或脚本、或文档之后先跑它们，几秒内能发现大部分低级错误。
+以上十二个纯 Node 脚本就是 `npm test`（会先跑一次 `node build-docs.mjs` 保证产物是新的）。改动 `page.template.html`、`assets/` 下的样式或脚本、或文档之后先跑它们，几秒内能发现大部分低级错误。
 
 `verify-render.mjs` 会产生 `test/.cache/`（复制一份 `md-core.cjs` 与 `md-app.js` 供排查），已加入 `.gitignore`。
 
