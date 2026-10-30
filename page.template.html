@@ -18,7 +18,10 @@
     <button class="brand" id="brandBtn" type="button" aria-haspopup="true" aria-expanded="false" title="帮助与关于">
       <span class="logo" aria-hidden="true"></span><span id="brandTitle">文档浏览器</span>
     </button>
+    <!-- 顶栏导航：首页（品牌副标题按钮）、书签、收藏，三者并列 -->
     <button class="brand bs" id="brandSub" type="button" title="回到首页"></button>
+    <button class="brand nv" id="bmkNav" type="button" title="查看书签">书签</button>
+    <button class="brand nv" id="favNav" type="button" title="查看收藏">收藏</button>
     <div class="menu" id="brandMenu" role="menu" aria-labelledby="brandBtn" hidden>
       <button class="menu-item" id="helpMenuItem" type="button" role="menuitem">帮助</button>
       <button class="menu-item" id="aboutMenuItem" type="button" role="menuitem">关于…</button>
@@ -98,10 +101,19 @@
 
 <div id="scrim"></div>
 
-<!-- 向下滚了一段才浮现的「回到顶部」：圆钮贴在正文右下角，浮现状态是按钮自身的 .on -->
-<button class="to-top" id="toTop" type="button" title="回到顶部" aria-label="回到顶部">
-  <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true"><path d="M8 12.6V4.2M3.9 8.3 8 4.2l4.1 4.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-</button>
+<!-- 内容视图右下角的浮动按钮组（竖排）：回到顶部 / 书签 / 收藏。
+     「回到顶部」滚过阈值才浮现（按钮自身的 .on）；书签、收藏只在打开文档时出现。 -->
+<div class="float-tools" id="floatTools">
+  <button class="ft-btn" id="toTop" type="button" title="回到顶部" aria-label="回到顶部">
+    <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true"><path d="M8 12.6V4.2M3.9 8.3 8 4.2l4.1 4.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="ft-btn" id="bmkBtn" type="button" aria-pressed="false" title="书签：保存当前阅读位置" aria-label="添加书签" hidden>
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4.5 2.5h7v11L8 11 4.5 13.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="ft-btn" id="favBtn" type="button" aria-pressed="false" title="收藏本文档" aria-label="收藏本文档" hidden>
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 2.3l1.66 3.5 3.84.52-2.8 2.72.7 3.86L8 11.06l-3.4 1.84.7-3.86-2.8-2.72 3.84-.52z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+  </button>
+</div>
 
 <!-- ==================================================================
      顶栏品牌菜单弹出的两个模态框（原生 <dialog>，showModal 自带焦点陷阱与 Esc 关闭）。

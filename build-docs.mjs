@@ -10,10 +10,12 @@
  *         · index.html       —— 实时服务版：同一模板、同一份数据，引擎改成本地外链、快照置空
  *         · docs-index.json  —— 最后一次构建的文档索引（实时服务用的是每次现扫的索引，不读这个文件）
  *         · config.json      —— 仅在缺失时生成默认配置
- *       --serve 与 --check 不写任何文件：--serve 把实时版页面放在内存里响应，
+ *       --serve 与 --check 不写任何构建产物：--serve 把实时版页面放在内存里响应，
  *       --check 只做比对。所以 --serve 指定哪个目录，都不会顶掉上面这些产物。
- *       唯一的例外是 VERSION：它只由 --stamp-version / --install-hook 写，
+ *       例外一：VERSION 只由 --stamp-version / --install-hook 写，
  *       构建本身也只读它，把里面那行版本串填进产物的 build-info 占位块。
+ *       例外二：--serve 下页面点「收藏 / 书签」时，通过 POST /api/bookmarks 按条增删工程根目录的
+ *       bookmark.json（按文档目录的绝对路径分键，见 serve()）；不点就一个字节都不写。
  *
  * 两种页面（都不联网，只用工程内的本地资源）：
  *   md-viewer.html  离线单文件：引擎整段内联，file:// 双击即可看（构建时刷新）
@@ -27,7 +29,8 @@
  *   node build-docs.mjs <目录>                 # 扫描任意目录（页面内路径前缀仍为 docs/）
  *   node build-docs.mjs --check [目录]         # 只检查是否过期（过期退出码 1），不写文件
  *   node build-docs.mjs --serve [目录]         # 启动本地实时服务（默认 8899，绑不上就往后顺延）
- *                                             #   访问 / 即进实时版；不写任何文件
+ *                                             #   访问 / 即进实时版；不写构建产物，
+ *                                             #   收藏/书签数据写工程根 bookmark.json
  *   node build-docs.mjs --serve --port 9000 [目录]
  *   node build-docs.mjs --serve --lan [目录]   # 绑定所有网卡（0.0.0.0），同一局域网内可访问
  *   node build-docs.mjs --serve --host 192.168.1.20 [目录]   # 只绑定指定的本机地址
@@ -63,7 +66,7 @@
  *      文档变动后重跑本脚本刷新。
  *   2) node build-docs.mjs --serve —— 打开 http://127.0.0.1:<端口>/ （即 index.html），
  *      实时读取文档目录下的 .md，新增/修改文档刷新页面即生效，无需重新构建；
- *      这一版页面在内存里现生成，--serve 全程不落盘；
+ *      这一版页面在内存里现生成，除「收藏 / 书签」的保存请求（写 bookmark.json）外不落盘；
  *      想给同一局域网里的同事看，加 --lan（等价于 --host 0.0.0.0）。
  * ===================================================================== */
 import fs from 'node:fs';
@@ -101,6 +104,9 @@ const INDEX_HTML = path.join(ROOT, 'index.html');       // 实时服务版（生
 const TEMPLATE = path.join(ROOT, 'page.template.html'); // 两个页面唯一的布局来源
 const INDEX = path.join(ROOT, 'docs-index.json');
 const CONFIG = path.join(ROOT, 'config.json');
+/* 收藏 / 书签数据：只有 --serve 下页面点按钮时才会写（见 serve()）。按文档目录的绝对路径分键，
+   同一个文件可以同时记多套文档目录的收藏，换目录不用搬家。 */
+const BOOKMARK = path.join(ROOT, 'bookmark.json');
 const HELP_DIR = path.join(ROOT, 'help');           // 帮助对话框的每一页：一个 .md
 const PKG = path.join(ROOT, 'package.json');
 const VERSION_FILE = path.join(ROOT, 'VERSION');    // 每次提交由 pre-commit 钩子刷新，见 --stamp-version
@@ -402,6 +408,8 @@ function snapshotPayload(docs, skipped) {
     generatedAt: new Date().toISOString(),
     docsRoot: VIRTUAL_ROOT + '/',
     docsDir: docsDirLabel(),
+    /* 页面保存收藏/书签时的索引键：构建/服务时定下的文档目录绝对路径（命令行给的相对路径已 resolve） */
+    docsDirAbs: DOCS_DIR,
     count: docs.length,
     kinds: countKinds(docs),
     skipped,
@@ -414,6 +422,7 @@ function indexPayload(docs, skipped) {
     generatedAt: new Date().toISOString(),
     docsRoot: VIRTUAL_ROOT + '/',
     docsDir: docsDirLabel(),
+    docsDirAbs: DOCS_DIR,
     count: docs.length,
     kinds: countKinds(docs),
     skipped,
@@ -834,6 +843,131 @@ async function build(mode = 'build') {
   return 0;
 }
 
+/* ---------- bookmark.json：收藏 / 书签（只由 --serve 的 API 写） ----------
+   结构：{ "<文档目录绝对路径>": {
+             favs:      [ { path, title, at } ],
+             bookmarks: [ { path, sec, secText, title, at } ]
+           } }
+   收藏按整篇记（每篇最多一条）；书签按章节记，每篇每个章节最多一条，(path, sec) 唯一。
+   文件不存在 / 内容损坏一律按空对象处理：宁可重写一份干净的，也不让页面白屏。
+   读的时候顺手归一化：丢掉不认识的字段，以及早期「按整篇记、没有章节」的旧书签
+   （那种记录在新模型里没有位置，保留下来也没法高亮/取消）。 */
+function cleanFavRecords(list) {
+  return (Array.isArray(list) ? list : [])
+    .filter((r) => r && typeof r === 'object' && typeof r.path === 'string' && r.path)
+    .map((r) => ({
+      path: r.path,
+      title: typeof r.title === 'string' ? r.title : '',
+      at: typeof r.at === 'string' ? r.at : '',
+    }));
+}
+
+function cleanBmkRecords(list) {
+  return (Array.isArray(list) ? list : [])
+    .filter((r) => r && typeof r === 'object' && typeof r.path === 'string' && r.path &&
+      typeof r.sec === 'string' && r.sec)
+    .map((r) => ({
+      path: r.path,
+      sec: r.sec,
+      secText: typeof r.secText === 'string' ? r.secText : '',
+      title: typeof r.title === 'string' ? r.title : '',
+      at: typeof r.at === 'string' ? r.at : '',
+    }));
+}
+
+function normalizeEntry(entry) {
+  entry = entry && typeof entry === 'object' ? entry : {};
+  return { favs: cleanFavRecords(entry.favs), bookmarks: cleanBmkRecords(entry.bookmarks) };
+}
+
+function readBookmarks() {
+  try {
+    const data = JSON.parse(fs.readFileSync(BOOKMARK, 'utf8'));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+    const out = {};
+    for (const key of Object.keys(data)) out[key] = normalizeEntry(data[key]);
+    return out;
+  } catch (e) { return {}; }
+}
+
+const asStr = (v) => (typeof v === 'string' ? v.trim() : '');
+
+/* 页面送来的操作在「最新数据」上执行：后到的删除不会被另一个标签页的旧副本写回。
+   返回 add / remove / none；不认识的 op 返回 null（调用方按 400 处理）。 */
+function applyBookOp(entry, op) {
+  const kind = op && op.op;
+  const path = asStr(op && op.path);
+  const sec = asStr(op && op.sec);
+  if (kind === 'fav-toggle' || kind === 'fav-remove') {
+    if (!path) return null;
+    const i = entry.favs.findIndex((r) => r.path === path);
+    if (i >= 0) { entry.favs.splice(i, 1); return 'remove'; }
+    if (kind === 'fav-remove') return 'none';
+    entry.favs.push({ path, title: asStr(op.title), at: new Date().toISOString() });
+    return 'add';
+  }
+  if (kind === 'bmk-toggle' || kind === 'bmk-remove') {
+    if (!path || !sec) return null;
+    const i = entry.bookmarks.findIndex((r) => r.path === path && r.sec === sec);
+    if (i >= 0) { entry.bookmarks.splice(i, 1); return 'remove'; }
+    if (kind === 'bmk-remove') return 'none';
+    entry.bookmarks.push({
+      path, sec,
+      secText: asStr(op.secText), title: asStr(op.title), at: new Date().toISOString(),
+    });
+    return 'add';
+  }
+  return null;
+}
+
+/* 读-改-写整条串起来：多个标签页同时保存时，后一次一定基于前一次的结果。
+   先写临时文件再 rename：中途崩了也不会留下半截 JSON。 */
+let bookmarkWriteChain = Promise.resolve();
+function runBookOp(key, op) {
+  const task = bookmarkWriteChain.then(async () => {
+    const data = readBookmarks();
+    const entry = normalizeEntry(data[key]);
+    const action = applyBookOp(entry, op);
+    if (action === null) {
+      const err = new Error('不支持的操作');
+      err.status = 400;
+      throw err;
+    }
+    if (entry.favs.length || entry.bookmarks.length) data[key] = entry;
+    else delete data[key];
+    /* 顺手清掉别的目录留下的空条目（旧数据归一化后可能只剩空壳） */
+    for (const k of Object.keys(data)) {
+      if (!data[k].favs.length && !data[k].bookmarks.length) delete data[k];
+    }
+    assertInsideRoot(BOOKMARK);
+    const tmp = BOOKMARK + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8');
+    await fsp.rename(tmp, BOOKMARK);
+    return { action, entry };
+  });
+  /* 一次失败不能堵死后面的操作：链上换成 resolve 过的 promise，错误只抛给本次请求 */
+  bookmarkWriteChain = task.catch(() => {});
+  return task;
+}
+
+/* 请求体只接受 JSON，超过 1 MB 直接拒绝（本地工具没有大请求的正当用途） */
+function readJsonBody(req, limit = 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { reject(new Error('请求体过大')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+      catch (e) { reject(new Error('请求体不是合法 JSON')); }
+    });
+    req.on('error', reject);
+  });
+}
+
 /* ---------- 本地静态服务（实时模式） ---------- */
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -959,6 +1093,33 @@ async function serve(port, kinds, host = DEFAULT_HOST, realtimeHtml) {
         const { docs, skipped } = await collect({ withText: false, kinds });
         return send(200, MIME['.json'], renderIndex(indexPayload(docs, skipped)));
       }
+      /* 收藏 / 书签：页面读写的就是工程根目录的 bookmark.json（按文档目录绝对路径分键）。
+         POST 是「按条操作」而不是整份覆盖：删除不会被另一个标签页的旧副本写回。 */
+      if (pathname === '/api/bookmarks') {
+        if (req.method === 'GET') {
+          return send(200, MIME['.json'], JSON.stringify(readBookmarks()));
+        }
+        if (req.method === 'POST') {
+          let body;
+          try { body = await readJsonBody(req); }
+          catch (e) { return send(400, MIME['.json'], JSON.stringify({ error: e.message })); }
+          if (!body || typeof body.key !== 'string' || !body.key || body.key.length > 4096) {
+            return send(400, MIME['.json'], JSON.stringify({ error: '缺少有效的 key（文档目录绝对路径）' }));
+          }
+          let result;
+          try {
+            result = await runBookOp(body.key, body.op);
+          } catch (e) {
+            return send(e.status || 500, MIME['.json'], JSON.stringify({ error: e.message }));
+          }
+          return send(200, MIME['.json'], JSON.stringify({
+            ok: true, action: result.action, entry: result.entry,
+          }));
+        }
+        return send(405, MIME['.json'], JSON.stringify({ error: '只支持 GET / POST' }));
+      }
+      /* 用户数据不进静态资源：别让 /bookmark.json 被当普通文件直接下载 */
+      if (pathname === '/bookmark.json') return send(403, MIME['.txt'], 'Forbidden');
       // 页面已内置 data: 图标，这里再兜一层，避免控制台出现无谓的 404
       if (pathname === '/favicon.ico') {
         res.writeHead(204, { 'Cache-Control': 'no-store' });

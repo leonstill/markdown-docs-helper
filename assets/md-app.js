@@ -24,6 +24,11 @@
   }
   function byPathZh(a, b) { return a.path.localeCompare(b.path, 'zh-Hans-CN'); }
   var NARROW = 860;
+  /* 右侧目录里「本节有书签」的小图标（由 a.has-bmk 控制显示） */
+  var TOC_BMK_ICON = '<span class="toc-bmk" title="有书签" aria-label="有书签">' +
+    '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">' +
+    '<path d="M4.5 2.5h7v11L8 11 4.5 13.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>' +
+    '</svg></span>';
 
   /* ---------- 默认配置：config.json 缺失或缺字段时用它兜底 ---------- */
   var DEFAULTS = {
@@ -51,11 +56,17 @@
     docs: [], visible: [], byPath: {}, byBase: {},
     cfg: DEFAULTS, cfgError: null, cfgFileLoaded: false,
     mode: 'snapshot', generatedAt: null, skipped: 0,
-    docsRoot: 'docs/', docsDir: '',
+    docsRoot: 'docs/', docsDir: '', docsDirAbs: '',
     current: null, headings: [],
-    view: 'home',                        // home | doc | search：首页滚动位置只在首页记
+    /* 刚点目录/书签链接跳到的那一节：当前章节先认它（页尾滚不到位、图异步撑高时几何判定会偏到上一节），
+       用户自己滚动后作废；pinY = 跳转完成时的滚动位置，用来分辨「自己滚了」 */
+    pinSec: null, pinY: null,
+    view: 'home',                        // home | doc | search | fav | bmk：首页滚动位置只在首页记
     regexMode: false,                    // 顶栏搜索条：输入内容是正则还是普通关键词组合
     leftOpen: false, rightOpen: true,
+    /* 收藏 / 书签：mode = server（--serve 读写 bookmark.json）| local（离线版退到浏览器本地存储）；
+       key = 文档目录绝对路径，数据按它分键 */
+    book: { ready: false, mode: 'local', key: '', favs: [], bookmarks: [], error: null },
     /* 思维导图：当前导图、markmap 实例、大纲、折叠集合 */
     mindmap: null, mm: null, mmOutline: [], mmFolded: [],
     /* 图表文档（.mermaid 里写 stateDiagram-v2 之类）：只用来区分右栏标题 */
@@ -521,6 +532,7 @@
     state.skipped = snap.skipped || 0;
     state.docsRoot = snap.docsRoot || state.docsRoot;
     state.docsDir = snap.docsDir || '';
+    state.docsDirAbs = snap.docsDirAbs || '';
     if (/^https?:/.test(location.protocol)) {
       try {
         var res = await fetch('docs-index.json', { cache: 'no-store' });
@@ -539,6 +551,7 @@
             state.generatedAt = idx.generatedAt;
             state.docsRoot = idx.docsRoot || state.docsRoot;
             state.docsDir = idx.docsDir || state.docsDir;
+            state.docsDirAbs = idx.docsDirAbs || state.docsDirAbs;
             state.skipped = idx.skipped || 0;
             return docs;
           }
@@ -1077,6 +1090,8 @@
       return;
     }
     state.headings = out.headings;
+    state.pinSec = null;                 // 重新渲染后先作废上一节的认定，落点确定后再认这次跳转到的那节
+    state.pinY = null;
     var chars = String(doc.text || '').length;
     $('article').innerHTML =
       '<div class="meta"><span>' + (doc.size ? (doc.size / 1024).toFixed(1) + ' KB' : '') + '</span>' +
@@ -1094,9 +1109,11 @@
     out.headings.forEach(function (h) {
       if (h.level < 2 || h.level > maxDepth) return;
       toc += '<li class="lv' + h.level + '"><a href="' + docHref(doc.path, h.id) +
-        '" data-sec="' + esc(h.id) + '">' + esc(Core.plain(h.text, htmlMode())) + '</a></li>';
+        '" data-sec="' + esc(h.id) + '"><span class="toc-t">' + esc(Core.plain(h.text, htmlMode())) +
+        '</span>' + TOC_BMK_ICON + '</a></li>';
     });
     $('tocList').innerHTML = toc || '<li class="toc-empty">本文无二级标题</li>';
+    syncTocMarks();                      // 目录里哪些章节已经收藏过书签
 
     renderSidebar();
     var idx = state.visible.indexOf(doc);
@@ -1106,10 +1123,12 @@
     requestAnimationFrame(function () {
       if (!(jump && jump.spec && jumpToMatch(jump, section))) {
         var el = section ? document.getElementById(section) : null;
-        if (el) { el.scrollIntoView({ block: 'start' }); flashEl(el); }
+        if (el) jumpToSection(el, section);
         else window.scrollTo(0, 0);
       }
       setupSpy();
+      if (state.pinSec) markTocActive(state.pinSec);
+      syncBookButtons();
     });
   }
 
@@ -1122,6 +1141,7 @@
     var map = {};
     links.forEach(function (a) { map[a.getAttribute('data-sec')] = a; });
     spy = new IntersectionObserver(function (entries) {
+      if (state.pinSec) return;         // 刚跳过来说的那一节更高优先，等用户自己滚了再交给几何判定
       var visible = entries.filter(function (e) { return e.isIntersecting; });
       if (!visible.length) return;
       visible.sort(function (a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
@@ -1133,6 +1153,37 @@
       var el = document.getElementById(id);
       if (el) spy.observe(el);
     });
+  }
+  function markTocActive(id) {
+    var links = $('tocList').querySelectorAll('a[data-sec]');
+    for (var i = 0; i < links.length; i++) {
+      links[i].classList.toggle('active', links[i].getAttribute('data-sec') === id);
+    }
+  }
+  /* 正文淡入（transform）结束后可滚动高度会缩回，落点可能被钳几像素；等动画收了再把基准对准 */
+  function settlePinY(section) {
+    setTimeout(function () {
+      if (state.pinSec !== section) return;
+      state.pinY = Math.round(window.scrollY);
+    }, 400);
+  }
+  /* 跳到某一节并把这一节认成当前章节（目录高亮、书签目标都跟它走），直到用户自己滚动 */
+  function jumpToSection(el, section) {
+    state.pinSec = section;
+    el.scrollIntoView({ block: 'start' });
+    state.pinY = Math.round(window.scrollY);
+    settlePinY(section);
+    flashEl(el);
+    /* 图是异步画的，画完正文会上下位移，落点得按新位置再对一次（用户已经自己滚了就不要再拽） */
+    var mged = state.mgPromise;
+    if (mged && mged.then) {
+      mged.then(function () {
+        if (state.pinSec !== section || !document.body.contains(el)) return;
+        el.scrollIntoView({ block: 'start' });
+        state.pinY = Math.round(window.scrollY);
+        settlePinY(section);
+      }).catch(function () {});
+    }
   }
 
   /* ==================================================================
@@ -2294,12 +2345,403 @@
     else if (act === 'full') setMermaidFullscreen(block);
   }
 
+  /* ==================================================================
+     收藏 / 书签
+     - 数据：{ favs: [...], bookmarks: [...] }，按文档目录的绝对路径（docsDirAbs）分键
+     - 收藏按整篇记（每篇最多一条）；书签按章节记，每篇每个章节最多一条，(path, sec) 唯一
+     - 实时服务（--serve）：POST /api/bookmarks 按条增删，服务端在最新数据上执行；
+       切回标签页时重新拉取，打开的多个页面最终一致
+     - 离线版（file://）：浏览器不让页面写文件，退回 localStorage（同键同格式，
+       与 bookmark.json 不互通，列表页会明确标出这一点）
+     ================================================================== */
+  var BOOK_PREFIX = 'mdv-bookmarks:';
+  function bookKey() { return state.docsDirAbs || state.docsDir || 'docs'; }
+  function normalizeBookEntry(e) {
+    function recs(list) {
+      return Array.isArray(list) ? list.filter(function (r) {
+        return r && typeof r.path === 'string' && r.path;
+      }) : [];
+    }
+    return {
+      favs: recs(e && e.favs).map(function (r) {
+        return {
+          path: r.path,
+          title: typeof r.title === 'string' ? r.title : '',
+          at: typeof r.at === 'string' ? r.at : ''
+        };
+      }),
+      bookmarks: recs(e && e.bookmarks).filter(function (r) {
+        return typeof r.sec === 'string' && r.sec;
+      }).map(function (r) {
+        return {
+          path: r.path, sec: r.sec,
+          secText: typeof r.secText === 'string' ? r.secText : '',
+          title: typeof r.title === 'string' ? r.title : '',
+          at: typeof r.at === 'string' ? r.at : ''
+        };
+      })
+    };
+  }
+  async function initBook() {
+    var key = bookKey();
+    state.book.key = key;
+    if (/^https?:/.test(location.protocol)) {
+      try {
+        var res = await fetch('/api/bookmarks', { cache: 'no-store' });
+        if (res.ok) {
+          var all = await res.json();
+          var e = normalizeBookEntry(all && typeof all === 'object' ? all[key] : null);
+          state.book.favs = e.favs;
+          state.book.bookmarks = e.bookmarks;
+          state.book.mode = 'server';
+          state.book.ready = true;
+          return;
+        }
+      } catch (err) { /* 不是 build-docs 起的服务：退回浏览器本地存储 */ }
+    }
+    state.book.mode = 'local';
+    try {
+      var raw = localStorage.getItem(BOOK_PREFIX + key);
+      var e2 = normalizeBookEntry(raw ? JSON.parse(raw) : null);
+      state.book.favs = e2.favs;
+      state.book.bookmarks = e2.bookmarks;
+    } catch (err) {
+      state.book.error = '本地收藏数据读取失败：' + ((err && err.message) || err);
+    }
+    state.book.ready = true;
+  }
+  function bookSig() { return JSON.stringify([state.book.favs, state.book.bookmarks]); }
+  /* 用新数据替换本地副本；没变化就不重绘，免得列表页被无谓地拉回顶部 */
+  function applyEntry(entry) {
+    var e = normalizeBookEntry(entry);
+    var changed = JSON.stringify([e.favs, e.bookmarks]) !== bookSig();
+    state.book.favs = e.favs;
+    state.book.bookmarks = e.bookmarks;
+    if (changed) refreshBookUI();
+    return changed;
+  }
+  function refreshBookUI() {
+    syncBookButtons();
+    syncTocMarks();
+    if (state.view === 'fav' || state.view === 'bmk') renderPickPage(state.view, true);
+  }
+  function findFav(path) {
+    for (var i = 0; i < state.book.favs.length; i++) if (state.book.favs[i].path === path) return i;
+    return -1;
+  }
+  function findBmk(path, sec) {
+    for (var i = 0; i < state.book.bookmarks.length; i++) {
+      if (state.book.bookmarks[i].path === path && state.book.bookmarks[i].sec === sec) return i;
+    }
+    return -1;
+  }
+  var toastEl = null, toastTimer = 0;
+  function toast(msg) {
+    if (!toastEl) {
+      toastEl = document.createElement('div');
+      toastEl.className = 'toast';
+      toastEl.setAttribute('role', 'status');
+      document.body.appendChild(toastEl);
+    }
+    toastEl.textContent = msg;
+    toastEl.classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove('on'); }, 1900);
+  }
+  /* 当前章节：刚点目录/书签链接跳过来的那一节优先；否则取右侧目录里「已经滚过顶栏下沿」的最后一个标题
+     （页尾滚不到位时后者会停在上一节，所以跳转目标不靠它推） */
+  function tocSectionLimit() { return Number(state.cfg.toc.maxDepth) || 4; }
+  function currentTocSection() {
+    var hs = state.headings || [], max = tocSectionLimit(), best = null, i, h;
+    if (state.pinSec) {
+      for (i = 0; i < hs.length; i++) {
+        h = hs[i];
+        if (h.id === state.pinSec && h.level >= 2 && h.level <= max) return h;
+      }
+    }
+    for (i = 0; i < hs.length; i++) {
+      h = hs[i];
+      if (h.level < 2 || h.level > max) continue;
+      var el = document.getElementById(h.id);
+      if (el && el.getBoundingClientRect().top <= 120) best = h;
+    }
+    return best;
+  }
+  function secTextOf(h) { return h ? Core.plain(h.text, htmlMode()) : ''; }
+  /* 右下角两枚按钮：只在文档页出现；书签按钮跟着当前章节亮/灭，没章节时不可用 */
+  function syncBookButtons() {
+    var doc = state.view === 'doc' ? state.current : null;
+    var favBtn = $('favBtn'), bmkBtn = $('bmkBtn');
+    favBtn.hidden = !doc;
+    bmkBtn.hidden = !doc;
+    if (!doc) return;
+    var fav = findFav(doc.path) >= 0;
+    favBtn.setAttribute('aria-pressed', String(fav));
+    favBtn.title = fav ? '取消收藏本文档' : '收藏本文档';
+    var sec = currentTocSection();
+    var has = !!(sec && findBmk(doc.path, sec.id) >= 0);
+    bmkBtn.disabled = !sec;
+    bmkBtn.setAttribute('aria-pressed', String(has));
+    bmkBtn.title = !sec
+      ? '书签：滚到目录里的章节才能收藏（本文没有可用的目录标题）'
+      : (has ? '取消本节书签：§ ' + secTextOf(sec) : '收藏当前章节：§ ' + secTextOf(sec));
+  }
+  /* 顶栏导航高亮：首页 / 书签 / 收藏 三选一 */
+  function syncNav() {
+    var map = { home: 'brandSub', bmk: 'bmkNav', fav: 'favNav' };
+    ['brandSub', 'bmkNav', 'favNav'].forEach(function (id) { $(id).removeAttribute('aria-current'); });
+    if (map[state.view]) $(map[state.view]).setAttribute('aria-current', 'page');
+  }
+  /* 右侧目录：有书签的章节挂上 .has-bmk（图标由 CSS 显示） */
+  function syncTocMarks() {
+    var doc = state.current;
+    var links = $('tocList').querySelectorAll('a[data-sec]');
+    for (var i = 0; i < links.length; i++) {
+      var a = links[i];
+      a.classList.toggle('has-bmk', !!(doc && findBmk(doc.path, a.getAttribute('data-sec')) >= 0));
+    }
+  }
+  /* 离线版把同样的操作应用在本地副本上（语义与服务端保持一致） */
+  function applyLocalOp(entry, op) {
+    var kind = op && op.op;
+    if (kind === 'fav-toggle' || kind === 'fav-remove') {
+      if (!op.path) return 'none';
+      for (var i = 0; i < entry.favs.length; i++) {
+        if (entry.favs[i].path !== op.path) continue;
+        entry.favs.splice(i, 1);
+        return 'remove';
+      }
+      if (kind === 'fav-remove') return 'none';
+      entry.favs.push({ path: op.path, title: op.title || '', at: new Date().toISOString() });
+      return 'add';
+    }
+    if (kind === 'bmk-toggle' || kind === 'bmk-remove') {
+      if (!op.path || !op.sec) return 'none';
+      for (var j = 0; j < entry.bookmarks.length; j++) {
+        if (entry.bookmarks[j].path !== op.path || entry.bookmarks[j].sec !== op.sec) continue;
+        entry.bookmarks.splice(j, 1);
+        return 'remove';
+      }
+      if (kind === 'bmk-remove') return 'none';
+      entry.bookmarks.push({
+        path: op.path, sec: op.sec, secText: op.secText || '',
+        title: op.title || '', at: new Date().toISOString()
+      });
+      return 'add';
+    }
+    return 'none';
+  }
+  var bookOpChain = Promise.resolve();
+  var bookOps = 0;                     // 有操作在飞时先别用 GET 的结果覆盖它
+  function runOp(op) {
+    if (state.book.mode === 'server') {
+      bookOps++;
+      var task = bookOpChain.catch(function () {}).then(function () {
+        return fetch('/api/bookmarks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: state.book.key, op: op })
+        }).then(function (res) {
+          return res.json().catch(function () { return {}; }).then(function (out) {
+            if (!res.ok) throw new Error((out && out.error) || 'HTTP ' + res.status);
+            return out;
+          });
+        }).then(function (out) {
+          if (out.entry) applyEntry(out.entry);
+          toastForOp(op, out.action);
+        });
+      });
+      bookOpChain = task.catch(function () {});
+      task.then(function () { bookOps--; }, function (err) {
+        bookOps--;
+        toast('保存失败：' + ((err && err.message) || err) + '，bookmark.json 没写成');
+        refreshBookFromServer();         // 回滚成服务端的真实状态
+      });
+      return task;
+    }
+    var entry = normalizeBookEntry({ favs: state.book.favs, bookmarks: state.book.bookmarks });
+    var action = applyLocalOp(entry, op);
+    state.book.favs = entry.favs;
+    state.book.bookmarks = entry.bookmarks;
+    try { localStorage.setItem(BOOK_PREFIX + state.book.key, JSON.stringify(entry)); }
+    catch (err) { toast('保存失败：浏览器本地存储不可用'); }
+    refreshBookUI();
+    toastForOp(op, action);
+    return Promise.resolve();
+  }
+  function toastForOp(op, action) {
+    if (action === 'add') {
+      if (op.op === 'fav-toggle') toast('已收藏：' + (op.title || ''));
+      else toast('已添加书签：§ ' + (op.secText || ''));
+    } else if (action === 'remove') {
+      if (op.op === 'fav-toggle') toast('已取消收藏');
+      else if (op.op === 'fav-remove') toast('已从收藏中删除');
+      else if (op.op === 'bmk-remove') toast('已删除书签');
+      else toast('已取消书签：§ ' + (op.secText || ''));
+    }
+  }
+  function toggleFav() {
+    var doc = state.current;
+    if (!doc) return;
+    runOp({ op: 'fav-toggle', path: doc.path, title: doc.title });
+  }
+  /* 书签按钮：当前章节有书签就取消，没有就记下这一节（每节最多一条） */
+  function toggleBookmark() {
+    var doc = state.current;
+    if (!doc) return;
+    var sec = currentTocSection();
+    if (!sec) return;
+    runOp({
+      op: 'bmk-toggle', path: doc.path, sec: sec.id,
+      secText: secTextOf(sec), title: doc.title
+    });
+  }
+  function fmtTime(iso) {
+    var d = new Date(iso);
+    if (!d || isNaN(d.getTime())) return '';
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+      ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function pickRow(gone, body, href, kind, path, sec) {
+    return '<div class="pick' + (gone ? ' gone' : '') + '">' +
+      (gone
+        ? '<div class="pick-main">' + body + '</div>'
+        : '<a class="pick-main" href="' + esc(href) + '">' + body + '</a>') +
+      '<button class="pick-del" type="button" data-unbook="' + kind + '" data-path="' + esc(path) + '"' +
+      (sec == null ? '' : ' data-sec="' + esc(sec) + '"') +
+      ' title="删除" aria-label="删除这条">✕</button></div>';
+  }
+  /* 收藏 / 书签列表页：书签按文档分组，每条是一个章节 */
+  function renderPickPage(kind, keepScroll) {
+    var isFav = kind === 'fav';
+    var sy = keepScroll ? window.scrollY : 0;
+    var list = isFav ? state.book.favs : state.book.bookmarks;
+    state.current = null;
+    state.mindmap = null;
+    state.diagram = null;
+    state.headings = [];
+    exitMindmapFullscreen();
+    exitMermaidFullscreen();
+    $('docPath').textContent = '';
+    $('tocList').innerHTML = '<li class="toc-empty">打开一篇文档后显示目录</li>';
+    applyConfig();
+    var html = '<h1>' + (isFav ? '收藏' : '书签') + '</h1>';
+    html += '<div class="meta"><span>' + list.length + ' 条</span>' +
+      '<span>' + (state.book.mode === 'server'
+        ? '已保存到工程根目录 bookmark.json'
+        : '离线版：保存在本浏览器（未写入 bookmark.json）') + '</span>' +
+      '<span class="no-print">' + esc(state.book.key) + '</span></div>';
+    if (state.book.error) html += '<div class="notice">⚠ ' + esc(state.book.error) + '</div>';
+    if (!state.book.ready) {
+      html += '<div class="intro">正在读取收藏数据…</div>';
+    } else if (!list.length) {
+      html += '<div class="intro">' + (isFav
+        ? '还没有收藏。打开一篇文档，点右下角的「收藏」即可把它记在这里。'
+        : '还没有书签。打开一篇文档、滚到想记住的章节，点右下角的「书签」；右侧目录里带书签图标的章节就是已收藏的。') + '</div>';
+    } else if (isFav) {
+      html += '<div class="picks">';
+      list.forEach(function (rec) {
+        var doc = state.byPath[rec.path];
+        var gone = !doc;
+        var body =
+          '<div class="pk-t">' + esc(doc ? doc.title : (rec.title || baseOf(rec.path))) + '</div>' +
+          '<div class="pk-p">' + esc(dispPath(rec.path)) + '</div>' +
+          '<div class="pk-m">收藏于 ' + fmtTime(rec.at) + (gone ? ' · 文档已不存在' : '') + '</div>';
+        html += pickRow(gone, body, docHref(rec.path), 'fav', rec.path, null);
+      });
+      html += '</div>';
+    } else {
+      var groups = [], byPath = {};
+      list.forEach(function (rec) {
+        var g = byPath[rec.path];
+        if (!g) { g = byPath[rec.path] = { path: rec.path, recs: [] }; groups.push(g); }
+        g.recs.push(rec);
+      });
+      groups.forEach(function (g) {
+        var doc = state.byPath[g.path];
+        var gone = !doc;
+        html += '<h2>' + esc(doc ? doc.title : (g.recs[0].title || baseOf(g.path))) + '</h2>';
+        html += '<div class="picks">';
+        g.recs.forEach(function (rec) {
+          var body =
+            '<div class="pk-t">§ ' + esc(rec.secText || '（无标题章节）') + '</div>' +
+            '<div class="pk-m">' + esc(dispPath(rec.path) + ' · ' + fmtTime(rec.at) +
+              (gone ? ' · 文档已不存在' : '')) + '</div>';
+          html += pickRow(gone, body, docHref(rec.path, rec.sec), 'bmk', rec.path, rec.sec);
+        });
+        html += '</div>';
+      });
+    }
+    $('article').innerHTML = '<div class="overview">' + html + '</div>';
+    document.title = (isFav ? '收藏' : '书签') + ' · ' + (state.cfg.title || '文档');
+    popArticle();
+    window.scrollTo(0, sy);
+  }
+  function removePick(kind, path, sec) {
+    if (kind === 'fav') runOp({ op: 'fav-remove', path: path });
+    else runOp({ op: 'bmk-remove', path: path, sec: sec || '' });
+  }
+  /* 用户自己滚了（滚轮、键盘、拖滚动条都会走到这里）：跳转时认下的那一节作废，交回几何判定。
+     容差要留够：正文淡入的 transform 会短暂撑大可滚动高度，跳转落点被钳回来时会有几像素回弹，
+     那不是用户滚动 */
+  window.addEventListener('scroll', function () {
+    if (!state.pinSec || state.pinY === null) return;
+    if (Math.abs(window.scrollY - state.pinY) <= 24) return;
+    state.pinSec = null;
+    state.pinY = null;
+    setupSpy();                          // 目录高亮也交回 IntersectionObserver
+  }, { passive: true });
+  /* 滚动换章节时按钮跟着亮/灭（rAF 合并，别每个 scroll 事件都量一遍） */
+  var bookScrollFrame = 0;
+  window.addEventListener('scroll', function () {
+    if (state.view !== 'doc' || bookScrollFrame) return;
+    bookScrollFrame = requestAnimationFrame(function () {
+      bookScrollFrame = 0;
+      if (state.view === 'doc') syncBookButtons();
+    });
+  }, { passive: true });
+  /* 跨标签页：切回来时重新拉一次；离线版听 storage 事件 */
+  function refreshBookFromServer() {
+    if (state.book.mode !== 'server') return Promise.resolve(false);
+    if (bookOps > 0) return Promise.resolve(false);   // 别拿旧快照盖掉刚提交的操作
+    return fetch('/api/bookmarks', { cache: 'no-store' }).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }).then(function (all) {
+      return applyEntry(all && typeof all === 'object' ? all[state.book.key] : null);
+    }).catch(function () { return false; });
+  }
+  var bookShowTimer = 0;
+  function refreshBookOnShow() {
+    if (state.book.mode !== 'server') return;
+    clearTimeout(bookShowTimer);
+    bookShowTimer = setTimeout(function () { refreshBookFromServer(); }, 150);
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refreshBookOnShow();
+  });
+  window.addEventListener('focus', refreshBookOnShow);
+  window.addEventListener('storage', function (e) {
+    if (state.book.mode !== 'local') return;
+    if (e.key !== BOOK_PREFIX + state.book.key) return;
+    try { applyEntry(e.newValue ? JSON.parse(e.newValue) : null); } catch (err) {}
+  });
+  $('favBtn').onclick = toggleFav;
+  $('bmkBtn').onclick = toggleBookmark;
+  $('favNav').onclick = function () { location.hash = '#v=fav'; };
+  $('bmkNav').onclick = function () { location.hash = '#v=bmk'; };
+
   /* ---------- 路由 ---------- */
   function route() {
     var h = parseHash();
     syncBarWithEntry();               // 开合跟着历史条目走，分支里不再改它
     var reMode = h.re === '1';
-    if (h.p && state.byPath[h.p]) {
+    if (h.v === 'fav' || h.v === 'bmk') {
+      state.view = h.v;
+      returnLeftPane();
+      renderPickPage(h.v);
+    } else if (h.p && state.byPath[h.p]) {
       state.view = 'doc';
       returnLeftPane();
       var jump = null;
@@ -2319,6 +2761,8 @@
       returnLeftPane();
       renderOverview();
     }
+    syncNav();
+    syncBookButtons();
   }
 
   /* ---------- 事件 ---------- */
@@ -2679,6 +3123,12 @@
   };
   document.addEventListener('click', function (e) {
     if (!e.target.closest) return;
+    var unbook = e.target.closest('[data-unbook]');
+    if (unbook) {
+      removePick(unbook.getAttribute('data-unbook'), unbook.getAttribute('data-path'),
+        unbook.getAttribute('data-sec'));
+      return;
+    }
     var mgBtn = e.target.closest('.mg-btn');
     if (mgBtn) { mgAct(mgBtn); return; }
     var oitem = e.target.closest('.mm-o-item');
@@ -2693,6 +3143,21 @@
     if (!oitem) return;
     e.preventDefault();
     mindmapOutlineActivate(oitem, true);
+  });
+  /* 点目录里「地址栏已经是这一节」的链接不会触发 hashchange，浏览器也不会再滚：
+     自己补一次，顺便把这一节重新认成当前章节（否则滚开以后再点回来就没反应） */
+  $('tocList').addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[data-sec]');
+    if (!a || state.view !== 'doc' || !state.current) return;
+    var sec = a.getAttribute('data-sec');
+    var h = parseHash();
+    if (h.p !== state.current.path || h.h !== sec || h.q !== undefined) return;   // 换 hash 的交给路由
+    var el = document.getElementById(sec);
+    if (!el) return;
+    e.preventDefault();
+    jumpToSection(el, sec);
+    markTocActive(sec);
+    syncBookButtons();
   });
 
   /* 点大纲：默认跳到该节点（顺带把路径展开）；点前面的小三角只做折叠/展开。
@@ -2840,7 +3305,19 @@
       var el = mgBlocks()[Number(i) || 0];
       return el ? exportMermaidSvg(el) : null;
     },
-    mermaidFullscreen: mgFullscreenOn
+    mermaidFullscreen: mgFullscreenOn,
+    /* 收藏 / 书签：当前数据、当前页、当前章节与几个动作（给浏览器测试用） */
+    book: function () {
+      return {
+        key: state.book.key, mode: state.book.mode, ready: state.book.ready,
+        favs: state.book.favs.slice(), bookmarks: state.book.bookmarks.slice()
+      };
+    },
+    bookFav: toggleFav,
+    bookToggle: toggleBookmark,
+    bookSection: function () { var h = currentTocSection(); return h ? h.id : null; },
+    bookPin: function () { return { sec: state.pinSec, pinY: state.pinY, scrollY: Math.round(window.scrollY) }; },
+    bookRefresh: refreshBookFromServer
   };
 
   /* ---------- 启动 ---------- */
@@ -2855,6 +3332,7 @@
     enableMotion();
     state.docs = await loadDocs();
     indexDocs(state.docs);
+    await initBook();           // 收藏/书签要在首屏路由前就绪（列表页、按钮状态都靠它）
     applyDocFilter();
     renderFoot();
     renderSidebar();

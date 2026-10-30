@@ -8,3 +8,7 @@ test/shots/
 index.html
 md-viewer.html
 docs-index.json
+
+# 个人数据：--serve 下页面点「收藏 / 书签」时写的收藏夹（按文档目录的绝对路径分键）
+bookmark.json
+bookmark.json.tmp
