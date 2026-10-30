@@ -31,6 +31,7 @@
     "test:mermaid-ui": "node test/mermaid-ui.mjs",
     "test:mermaid-ui:realtime": "node test/mermaid-ui.mjs --realtime",
     "test:mermaid-style": "node test/mermaid-style-ui.mjs",
+    "test:mermaid-labels": "node test/mermaid-labels-ui.mjs",
     "shots": "node test/shot-anim.mjs",
     "stale": "node test/why-stale.mjs"
   },

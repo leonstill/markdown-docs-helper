@@ -1944,11 +1944,135 @@
     }
     return svg;
   }
+  /* 边标签避让：dagre 只给标签一个锚点（labelpos 写死为 c，mermaid 没有「标签放哪里」的配置）。
+     两条跨子图的边会把标签叠在同一个位置；贴着节点的标签还会盖住入箭头。
+     这里只处理有问题的标签，正常的标签一个都不动：
+       · 触发：与另一个标签重叠，或离任一节点 < 16px（底片已经加过留白，按加完的盒量）；
+       · 做法：沿它自己的连线在 30%–70% 处找离节点/标签最远的点，中段堵死才放宽到 15%–85%，
+         同分时偏向中点；
+       · 配对靠 mermaid 的 DOM 约定：g.edgeLabel > g.label[data-id] ↔ path[id$="-"+data-id]。
+     只处理 flowchart：状态图的标签/路径配对方式不同，而且它的标签位置本来就不该按流程图调。
+     反例（别改成「一律放中点」）：正常标签可能被推去贴别的节点 —— 本仓库示例里
+     「需求书」的中点就离 HOST 只有 2px，所以必须先判定它有没有问题。 */
+  var MG_LABEL_MIN_NODE_GAP = 16;
+  var MG_LABEL_MID = [0.3, 0.7];        // 优先在路径中段找
+  var MG_LABEL_WIDE = [0.15, 0.85];     // 中段实在堵死才放宽
+  function mgPlaceEdgeLabels(svg) {
+    if (!svg || typeof svg.getScreenCTM !== 'function' || typeof svg.createSVGPoint !== 'function') return svg;
+    var svgBox = svg.getBoundingClientRect();
+    if (!svgBox.width || !svgBox.height) return svg;      // 折叠/隐藏时没有可量的坐标
+    var flowPaths = svg.querySelectorAll('g.edgePaths > path.flowchart-link');
+    var labels = svg.querySelectorAll('g.edgeLabel');
+    var nodes = svg.querySelectorAll('g.node');
+    if (!flowPaths.length || !labels.length || !nodes.length) return svg;
+    var ctm = svg.getScreenCTM();
+    if (!ctm) return svg;
+    var inv;
+    try { inv = ctm.inverse(); } catch (e) { return svg; }
+    function toUser(x, y) {
+      var p = svg.createSVGPoint();
+      p.x = x; p.y = y;
+      return p.matrixTransform(inv);
+    }
+    function userBox(el) {
+      var r = el.getBoundingClientRect();
+      var a = toUser(r.left, r.top), b = toUser(r.right, r.bottom);
+      return {
+        x: Math.min(a.x, b.x), y: Math.min(a.y, b.y),
+        w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y)
+      };
+    }
+    /* 两个盒的间隙：负数是重叠（取两个方向里较小的重叠深度），正数是最近距离 */
+    function boxGap(a, b) {
+      var dx = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w));
+      var dy = Math.max(b.y - (a.y + a.h), a.y - (b.y + b.h));
+      return Math.max(dx, dy);
+    }
+    var nodeBoxes = [];
+    for (var i = 0; i < nodes.length; i++) nodeBoxes.push(userBox(nodes[i]));
+    function nodeGap(box) {
+      var g = Infinity;
+      for (var i = 0; i < nodeBoxes.length; i++) g = Math.min(g, boxGap(box, nodeBoxes[i]));
+      return g;
+    }
+
+    var items = [];
+    for (var i = 0; i < labels.length; i++) {
+      var g = labels[i];
+      var inner = g.querySelector('g.label');
+      var fo = g.querySelector('foreignObject');
+      var did = inner && inner.getAttribute('data-id');
+      if (!did || !fo) continue;
+      var path = null;
+      for (var j = 0; j < flowPaths.length; j++) {
+        var pid = flowPaths[j].id || '';
+        if (pid.slice(-did.length - 1) === '-' + did) { path = flowPaths[j]; break; }
+      }
+      if (!path || typeof path.getTotalLength !== 'function') continue;
+      var w = Number(fo.getAttribute('width')) || 0;
+      var h = Number(fo.getAttribute('height')) || 0;
+      if (!w || !h) continue;                 // 空标签
+      var m = /translate\(\s*(-?[\d.]+)[ ,]+(-?[\d.]+)\s*\)/.exec(g.getAttribute('transform') || '');
+      if (!m) continue;
+      var it = { g: g, path: path, w: w, h: h, cx: +m[1], cy: +m[2] };
+      it.box = { x: it.cx - w / 2, y: it.cy - h / 2, w: w, h: h };
+      it.nodeGap = nodeGap(it.box);
+      it.labelGap = Infinity;
+      items.push(it);
+    }
+    if (!items.length) return svg;
+    for (var i = 0; i < items.length; i++) {
+      for (var j = i + 1; j < items.length; j++) {
+        var d = boxGap(items[i].box, items[j].box);
+        if (d < items[i].labelGap) items[i].labelGap = d;
+        if (d < items[j].labelGap) items[j].labelGap = d;
+      }
+    }
+    var needy = [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].labelGap < 0 || items[i].nodeGap < MG_LABEL_MIN_NODE_GAP) needy.push(items[i]);
+    }
+    if (!needy.length) return svg;
+    needy.sort(function (a, b) {
+      return Math.min(a.nodeGap, a.labelGap) - Math.min(b.nodeGap, b.labelGap);
+    });
+    var placed = [];
+    for (var i = 0; i < items.length; i++) if (needy.indexOf(items[i]) < 0) placed.push(items[i]);
+
+    function scan(it, band) {
+      var len = it.path.getTotalLength();
+      if (!len) return null;
+      var best = null;
+      for (var t = band[0]; t <= band[1] + 0.0001; t += 0.05) {
+        var pt = it.path.getPointAtLength(len * t);
+        var box = { x: pt.x - it.w / 2, y: pt.y - it.h / 2, w: it.w, h: it.h };
+        var clear = nodeGap(box);
+        for (var k = 0; k < placed.length; k++) clear = Math.min(clear, boxGap(box, placed[k].box));
+        var score = clear - Math.abs(t - 0.5) * 30;   // 中段优先，间隙只用来否决
+        if (!best || score > best.score) best = { x: pt.x, y: pt.y, box: box, clear: clear, score: score };
+      }
+      return best;
+    }
+
+    for (var i = 0; i < needy.length; i++) {
+      var it = needy[i];
+      var cur = Math.min(it.nodeGap, it.labelGap);
+      var best = scan(it, MG_LABEL_MID);
+      if (!best || best.clear < 8) best = scan(it, MG_LABEL_WIDE) || best;
+      if (!best || best.clear <= cur) continue;        // 挪了也没更好，保持原样
+      it.g.setAttribute('transform', 'translate(' + best.x + ', ' + best.y + ')');
+      it.g.setAttribute('data-mg-label-moved', '1');  // 给测试/排查用，不参与渲染
+      it.box = best.box;
+      placed.push(it);
+    }
+    return svg;
+  }
   function mgDecorate(svg) {
     if (!svg || mgStyleName() !== 'doc') return svg;
     mgTuneMarkers(svg);
     mgInjectTheme(svg);
     mgPadLabels(svg);
+    mgPlaceEdgeLabels(svg);
     return svg;
   }
   function initMermaidEngine() {
