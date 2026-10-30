@@ -44,7 +44,7 @@ const PROBE = `(function(){
     sideOpen: document.body.classList.contains('side-open'),
     leftPressed: document.getElementById('toggleLeft').getAttribute('aria-pressed'),
     rightPressed: document.getElementById('toggleRight').getAttribute('aria-pressed'),
-    brand: txt('#brandTitle'), sub: txt('#brandSub'),
+    brand: txt('#brandTitle'), sub: txt('#brandSub'), subHidden: document.getElementById('brandSub').hidden,
     sidebarTitle: txt('#sidebarTitle'), tocTitle: txt('#tocTitle'),
     homeHeading: txt('#article h1'),
     introLen: (document.querySelector('#article .intro')||{textContent:''}).textContent.trim().length,
@@ -250,6 +250,35 @@ class CDP {
     check('无 console 错误', cdp.errors().length === 0, cdp.errors().join('; '));
     await cdp.shot('01-overview.png');
 
+    console.log('\n--- A2. 品牌区：标题开菜单、副标题回首页 ---');
+    check('有副标题时按钮可见', p.subHidden === false);
+    await cdp.ev("document.getElementById('brandBtn').click()");
+    await sleep(300);
+    check('点标题打开帮助/关于菜单', await cdp.ev("!document.getElementById('brandMenu').hidden"));
+    check('菜单项是帮助 + 关于…', await cdp.ev("document.querySelectorAll('#brandMenu .menu-item').length") === 2);
+    await cdp.shot('01b-brand-menu.png');
+    await cdp.ev("document.getElementById('brandSub').click()");
+    await cdp.waitFor("document.querySelectorAll('.card').length>0");
+    await sleep(400);
+    p = await cdp.ev(PROBE);
+    check('首页点副标题仍在首页、菜单收起', p.homeHeading === embeddedCfg.home.title &&
+      await cdp.ev("document.getElementById('brandMenu').hidden"));
+    if (!expDocs.length) {
+      console.log('  · 跳过：没有可见文档可打开');
+    } else {
+      await cdp.ev("location.hash = '#p=' + encodeURIComponent(" + JSON.stringify(expDocs[0].path) + ")");
+      await cdp.waitFor("(document.getElementById('docPath').textContent||'').length>0");
+      await sleep(400);
+      check('已打开文档页', await cdp.ev("location.hash.indexOf('p=') >= 0"));
+      await cdp.ev("document.getElementById('brandSub').click()");
+      await cdp.waitFor("document.querySelectorAll('.card').length>0");
+      await sleep(400);
+      p = await cdp.ev(PROBE);
+      check('文档页点副标题回到首页', p.homeHeading === embeddedCfg.home.title && p.cards === expDocs.length,
+        p.homeHeading + ' cards=' + p.cards);
+      check('回首页后 hash 已清空', await cdp.ev("location.hash === '' || location.hash === '#'"));
+    }
+
     console.log('\n--- B. 顶部开关 + 侧栏 ✕ ---');
     await cdp.ev("document.getElementById('toggleLeft').click()");
     await sleep(400);
@@ -296,6 +325,7 @@ class CDP {
     console.log('   ' + JSON.stringify({ left: p.leftHidden, right: p.rightHidden, scrim: p.scrimShown, vw: p.vw }));
     check('窄屏默认两栏都收起', p.leftHidden === true && p.rightHidden === true);
     check('窄屏初始无遮罩', p.scrimShown === false);
+    check('窄屏隐藏副标题按钮', await cdp.ev("getComputedStyle(document.getElementById('brandSub')).display === 'none'"));
     await cdp.ev("document.getElementById('toggleLeft').click()");
     await sleep(500);
     s = await cdp.ev(PROBE);
@@ -317,6 +347,7 @@ class CDP {
       const mod = JSON.parse(originalConfig.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, ''));
       mod.home.title = '自定义首页标题';
       mod.home.intro = '## 测试引导\n\n这是 **临时** 内容。';
+      mod.subtitle = '';
       mod.sidebar.folders = [{ dir: scenDir, label: '测试分组名' }];
       mod.sidebar.docs = {};
       if (hidePath) mod.sidebar.docs[hidePath] = { hidden: true };
@@ -330,6 +361,7 @@ class CDP {
       await sleep(700);
       p = await cdp.ev(PROBE);
       check('首页标题被 config 改写', p.homeHeading === '自定义首页标题', p.homeHeading);
+      check('副标题清空后按钮隐藏', p.subHidden === true, 'subHidden=' + p.subHidden);
       check('intro 改成 Markdown 后正确渲染', p.introLen > 10, 'len=' + p.introLen);
       check('folders 白名单生效', sameSet(p.dirs, ['测试分组名']) && p.docitems === expAfter.length,
         p.dirs.join('|') + ' items=' + p.docitems + ' 期望=' + expAfter.length);

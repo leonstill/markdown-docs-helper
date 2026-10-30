@@ -269,6 +269,7 @@
     cwApply();
     $('brandTitle').textContent = c.title || '';
     $('brandSub').textContent = c.subtitle || '';
+    $('brandSub').hidden = !c.subtitle;
     $('sidebarTitle').textContent = c.sidebar.title || '';
     $('tocTitle').textContent = (state.mindmap ? '导图大纲' : state.diagram ? '图表' : c.toc.title) || '';
     $('searchWrap').style.display = c.sidebar.showSearch === false ? 'none' : '';
@@ -2317,6 +2318,11 @@
     setBrandMenu(open);
     /* 键盘打开菜单：焦点直接进到第一项，否则方向键只能原地按（e.detail===0 = 键盘触发的 click） */
     if (open && e.detail === 0) { var first = brandMenuItems()[0]; if (first) first.focus(); }
+  };
+  /* 副标题是独立的「回到首页」按钮：hash 清空就是首页路由；顺带收掉菜单 */
+  $('brandSub').onclick = function () {
+    setBrandMenu(false);
+    location.hash = '';
   };
   /* 挂在上层容器上：焦点在品牌按钮或菜单项上，方向键都收得到 */
   brandWrap.addEventListener('keydown', function (e) {
