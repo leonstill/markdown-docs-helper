@@ -18,10 +18,10 @@
     <button class="brand" id="brandBtn" type="button" aria-haspopup="true" aria-expanded="false" title="帮助与关于">
       <span class="logo" aria-hidden="true"></span><span id="brandTitle">文档浏览器</span>
     </button>
-    <!-- 顶栏导航：首页（品牌副标题按钮）、书签、收藏，三者并列 -->
-    <button class="brand bs" id="brandSub" type="button" title="回到首页"></button>
-    <button class="brand nv" id="bmkNav" type="button" title="查看书签">书签</button>
-    <button class="brand nv" id="favNav" type="button" title="查看收藏">收藏</button>
+    <!-- 顶栏导航：首页（品牌副标题）、书签、收藏，三者并列；当前项由粗下边框表示 -->
+    <a class="brand bs" id="brandSub" href="#" title="回到首页"></a>
+    <a class="brand nv" id="bmkNav" href="#v=bmk" title="查看书签">书签</a>
+    <a class="brand nv" id="favNav" href="#v=fav" title="查看收藏">收藏</a>
     <div class="menu" id="brandMenu" role="menu" aria-labelledby="brandBtn" hidden>
       <button class="menu-item" id="helpMenuItem" type="button" role="menuitem">帮助</button>
       <button class="menu-item" id="aboutMenuItem" type="button" role="menuitem">关于…</button>
@@ -44,6 +44,17 @@
     <svg class="i-link" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     <svg class="i-check" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M3 8.6 6.2 11.8 13 4.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
   </button>
+  <div class="btn-menu" id="railWrap">
+    <button class="btn icon" id="railBtn" type="button" aria-haspopup="true" aria-expanded="false"
+            aria-controls="railMenu" aria-pressed="true" title="显示书签列">
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 1.3v2.1M8 11.7v3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M5.4 3.4h5.2v8.2L8 9.7l-2.6 1.9z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="menu r" id="railMenu" role="menu" aria-labelledby="railBtn" hidden>
+      <button class="menu-item" type="button" role="menuitemradio" aria-checked="false" data-rail="off">关闭</button>
+      <button class="menu-item" type="button" role="menuitemradio" aria-checked="true" data-rail="left">文档左侧</button>
+      <button class="menu-item" type="button" role="menuitemradio" aria-checked="false" data-rail="right">文档右侧</button>
+    </div>
+  </div>
   <button class="btn icon" id="themeBtn" title="切换深/浅色" aria-label="切换深/浅色主题">
     <svg class="i-sun" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
     <svg class="i-moon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
@@ -86,6 +97,8 @@
     <div class="w-edge l" id="wEdgeL" aria-hidden="true" title="拖动调整正文宽度（向两边对称，双击复原）"></div>
     <article class="article" id="article"></article>
     <div class="w-edge r" id="wEdgeR" aria-hidden="true" title="拖动调整正文宽度（向两边对称，双击复原）"></div>
+    <!-- 正文一侧的书签示意列（顶栏「显示书签列」选左/右/关闭）：固定高度，整篇按行号比例映射；图标由 md-app.js 按当前文档生成 -->
+    <div class="bmk-rail" id="bmkRail" role="navigation" aria-label="本文书签位置" hidden></div>
   </main>
 
   <div class="pane-split" id="splitR" aria-hidden="true" title="拖动调整右栏宽度（双击复原）"></div>

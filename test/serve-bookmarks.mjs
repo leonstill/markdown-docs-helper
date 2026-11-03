@@ -5,7 +5,8 @@
  *   · GET  /api/bookmarks       → 200，JSON 对象（文件不存在时 {}），读取时归一化
  *   · POST /api/bookmarks       → 按条操作（服务端在最新数据上执行）：
  *        fav-toggle / fav-remove   收藏按整篇记（每篇一条）
- *        bmk-toggle / bmk-remove   书签按章节记（每篇每节一条，(path, sec) 唯一）
+ *        bmk-toggle / bmk-remove   书签以行为主：line 是源文件行号，±2 行内就近切换；
+ *                                  从搜索跳过来时还带 q / re / occ，用于恢复高亮
  *   · GET  /docs-index.json     → 带 docsDirAbs，且等于文档目录的真实绝对路径
  *   · 旧数据（只有整篇、没有 sec、带 ratio）读取时被丢/清洗干净
  *   · 条目清空后该 key 从文件里删掉；写入是原子的（不留 .tmp）
@@ -137,6 +138,38 @@ async function run() {
     // 7. GET 读到的就是最新数据
     const got = await getBook(base);
     check(got[key] && got[key].bookmarks.length === 2, 'GET 能读回当前条目', JSON.stringify(got[key] && got[key].bookmarks.length));
+
+    // 7b. 按行记录：±2 行就近切换；记录搜索关键词与命中序号；按行/at 精确删除
+    const docB = 'docs/指南/配置说明.md';
+    r = await post(base, {
+      key,
+      op: { op: 'bmk-toggle', path: docB, sec: '配置说明', secText: '配置说明', title: '配置说明', line: 42, q: 'mermaid', re: true, occ: 3, junk: 1 },
+    });
+    out = await r.json();
+    saved = disk()[key];
+    const lineBmk = saved.bookmarks.find((x) => x.path === docB);
+    check(out.action === 'add' && lineBmk && lineBmk.line === 42 && lineBmk.q === 'mermaid' &&
+      lineBmk.re === true && lineBmk.occ === 3 && !('junk' in lineBmk),
+      '按行书签记录 line / q / re / occ，未知字段被丢掉', JSON.stringify(lineBmk));
+    r = await post(base, { key, op: { op: 'bmk-toggle', path: docB, sec: '配置说明', line: 44 } });
+    out = await r.json();
+    check(out.action === 'remove' && !disk()[key].bookmarks.some((x) => x.path === docB),
+      '当前行附近（±2）再次 toggle → 取消', JSON.stringify(out));
+    await post(base, { key, op: { op: 'bmk-toggle', path: docB, sec: '配置说明', line: 50 } });
+    await post(base, { key, op: { op: 'bmk-toggle', path: docB, sec: '配置说明', line: 53 } });
+    saved = disk()[key];
+    check(saved.bookmarks.filter((x) => x.path === docB).length === 2,
+      '同一节可记多条按行书签（相距 >2 行不合并）', JSON.stringify(saved.bookmarks.filter((x) => x.path === docB)));
+    r = await post(base, { key, op: { op: 'bmk-remove', path: docB, line: 53, sec: '配置说明' } });
+    out = await r.json();
+    saved = disk()[key];
+    const left = saved.bookmarks.filter((x) => x.path === docB);
+    check(out.action === 'remove' && left.length === 1 && left[0].line === 50,
+      'bmk-remove 按行只删指定那一条', JSON.stringify(left));
+    r = await post(base, { key, op: { op: 'bmk-remove', path: docB, at: left[0].at } });
+    out = await r.json();
+    check(out.action === 'remove' && !disk()[key].bookmarks.some((x) => x.path === docB),
+      'bmk-remove 也能按 at 删除（列表页用）', JSON.stringify(out));
 
     // 8. 旧数据归一化：没有 sec 的旧书签、ratio 字段在读取时被清掉
     const legacy = {

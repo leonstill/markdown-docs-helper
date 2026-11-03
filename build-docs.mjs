@@ -846,12 +846,14 @@ async function build(mode = 'build') {
 /* ---------- bookmark.json：收藏 / 书签（只由 --serve 的 API 写） ----------
    结构：{ "<文档目录绝对路径>": {
              favs:      [ { path, title, at } ],
-             bookmarks: [ { path, sec, secText, title, at } ]
+             bookmarks: [ { path, sec, secText, title, line, q, re, occ, at } ]
            } }
-   收藏按整篇记（每篇最多一条）；书签按章节记，每篇每个章节最多一条，(path, sec) 唯一。
+   收藏按整篇记（每篇最多一条）；书签以行为主：line 是源文件行号（0 基），
+   q / re / occ 只在「从搜索结果跳过来再添加」时记录，用来恢复关键词高亮。
+   sec 仍保留：右侧目录用它判断「本节有书签」。旧版按章节记、没有 line 的记录继续可用，
+   点开后按章节定位，直到用户删掉或重新添加。
    文件不存在 / 内容损坏一律按空对象处理：宁可重写一份干净的，也不让页面白屏。
-   读的时候顺手归一化：丢掉不认识的字段，以及早期「按整篇记、没有章节」的旧书签
-   （那种记录在新模型里没有位置，保留下来也没法高亮/取消）。 */
+   读的时候顺手归一化：丢掉不认识的字段，以及早期「按整篇记、没有章节也没有行号」的旧书签。 */
 function cleanFavRecords(list) {
   return (Array.isArray(list) ? list : [])
     .filter((r) => r && typeof r === 'object' && typeof r.path === 'string' && r.path)
@@ -865,14 +867,23 @@ function cleanFavRecords(list) {
 function cleanBmkRecords(list) {
   return (Array.isArray(list) ? list : [])
     .filter((r) => r && typeof r === 'object' && typeof r.path === 'string' && r.path &&
-      typeof r.sec === 'string' && r.sec)
-    .map((r) => ({
-      path: r.path,
-      sec: r.sec,
-      secText: typeof r.secText === 'string' ? r.secText : '',
-      title: typeof r.title === 'string' ? r.title : '',
-      at: typeof r.at === 'string' ? r.at : '',
-    }));
+      ((typeof r.sec === 'string' && r.sec) || (Number.isInteger(r.line) && r.line >= 0)))
+    .map((r) => {
+      const out = {
+        path: r.path,
+        sec: typeof r.sec === 'string' ? r.sec : '',
+        secText: typeof r.secText === 'string' ? r.secText : '',
+        title: typeof r.title === 'string' ? r.title : '',
+        at: typeof r.at === 'string' ? r.at : '',
+      };
+      if (Number.isInteger(r.line) && r.line >= 0) out.line = r.line;
+      if (typeof r.q === 'string' && r.q) {
+        out.q = r.q;
+        out.re = r.re === true || r.re === 1;
+        out.occ = Number.isInteger(r.occ) && r.occ >= 0 ? r.occ : 0;
+      }
+      return out;
+    });
 }
 
 function normalizeEntry(entry) {
@@ -891,6 +902,9 @@ function readBookmarks() {
 }
 
 const asStr = (v) => (typeof v === 'string' ? v.trim() : '');
+/* 书签「就近切换」的容差：当前行 ±2 行内已有书签，就当用户是在取消它 */
+const BMK_NEAR = 2;
+const bmkLine = (op) => (op && Number.isInteger(op.line) && op.line >= 0 ? op.line : null);
 
 /* 页面送来的操作在「最新数据」上执行：后到的删除不会被另一个标签页的旧副本写回。
    返回 add / remove / none；不认识的 op 返回 null（调用方按 400 处理）。 */
@@ -898,6 +912,8 @@ function applyBookOp(entry, op) {
   const kind = op && op.op;
   const path = asStr(op && op.path);
   const sec = asStr(op && op.sec);
+  const line = bmkLine(op);
+  const at = asStr(op && op.at);
   if (kind === 'fav-toggle' || kind === 'fav-remove') {
     if (!path) return null;
     const i = entry.favs.findIndex((r) => r.path === path);
@@ -906,16 +922,44 @@ function applyBookOp(entry, op) {
     entry.favs.push({ path, title: asStr(op.title), at: new Date().toISOString() });
     return 'add';
   }
-  if (kind === 'bmk-toggle' || kind === 'bmk-remove') {
-    if (!path || !sec) return null;
-    const i = entry.bookmarks.findIndex((r) => r.path === path && r.sec === sec);
+  if (kind === 'bmk-toggle') {
+    if (!path || (!sec && line === null)) return null;
+    let i = -1;
+    if (line !== null) {
+      let best = BMK_NEAR + 1;
+      entry.bookmarks.forEach((r, k) => {
+        if (r.path !== path || !Number.isInteger(r.line)) return;
+        const d = Math.abs(r.line - line);
+        if (d <= BMK_NEAR && d < best) { best = d; i = k; }
+      });
+    } else {
+      i = entry.bookmarks.findIndex((r) => r.path === path && r.sec === sec);
+    }
     if (i >= 0) { entry.bookmarks.splice(i, 1); return 'remove'; }
-    if (kind === 'bmk-remove') return 'none';
-    entry.bookmarks.push({
+    const rec = {
       path, sec,
-      secText: asStr(op.secText), title: asStr(op.title), at: new Date().toISOString(),
-    });
+      secText: asStr(op.secText), title: asStr(op.title),
+      at: new Date().toISOString(),
+    };
+    if (line !== null) rec.line = line;
+    const q = asStr(op.q);
+    if (q && line !== null) {
+      rec.q = q;
+      rec.re = op.re === true || op.re === 1;
+      rec.occ = Number.isInteger(op.occ) && op.occ >= 0 ? op.occ : 0;
+    }
+    entry.bookmarks.push(rec);
     return 'add';
+  }
+  if (kind === 'bmk-remove') {
+    if (!path) return null;
+    let i = -1;
+    if (line !== null) i = entry.bookmarks.findIndex((r) => r.path === path && r.line === line);
+    if (i < 0 && at) i = entry.bookmarks.findIndex((r) => r.path === path && r.at === at);
+    if (i < 0 && sec) i = entry.bookmarks.findIndex((r) => r.path === path && r.sec === sec);
+    if (i < 0) return 'none';
+    entry.bookmarks.splice(i, 1);
+    return 'remove';
   }
   return null;
 }

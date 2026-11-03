@@ -62,31 +62,49 @@ kbd{font-family:var(--font-mono); font-size:.8em; border:1px solid var(--border)
 }
 .topbar .brand:hover .logo{transform:rotate(-8deg) scale(1.08); box-shadow:0 2px 8px var(--accent-glow)}
 .topbar .brand.bs{color:var(--fg-muted); font-weight:400}
-/* 品牌区两枚按钮：标题点开下拉菜单（帮助 / 关于…），副标题回到首页 */
+/* 品牌区：标题点开下拉菜单（帮助 / 关于…），副标题回到首页。
+   标题只当作可点的文字与图标，不做按钮外观（悬停只让 logo 动）。 */
 .topbar .brand{
   font-weight:700; font-size:15px; white-space:nowrap; display:flex; align-items:center; gap:7px;
-  height:32px; padding:0 9px; border:1px solid transparent; border-radius:6px; color:var(--fg);
-  transition:border-color .16s var(--ease), background-color .18s var(--ease), box-shadow .2s var(--ease);
+  height:32px; padding:0 9px; border:0; border-radius:0; background:none; color:var(--fg);
+  transition:color .16s var(--ease);
 }
-.topbar .brand:hover{background:var(--bg-soft); border-color:var(--border)}
-.topbar .brand:active{background:var(--accent-soft)}
 .topbar .brand:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
-.topbar .brand[aria-expanded="true"]{background:var(--accent-soft); border-color:var(--accent); color:var(--accent)}
+.topbar .brand[aria-expanded="true"]{background:none; color:var(--accent)}
 .topbar .brand[hidden]{display:none}
-/* 顶栏导航项（书签 / 收藏）：与副标题按钮同样式；当前所在的页高亮 */
-.topbar .brand.nv{font-weight:400; color:var(--fg-muted); font-size:13.5px}
-.topbar .brand.nv[aria-current="page"]{
-  color:var(--accent); background:var(--accent-soft); border-color:var(--accent);
+/* 顶栏导航（首页 / 书签 / 收藏）：不是按钮外观，当前项用底部粗线表示。
+   高度取顶栏内容区（100%），不覆盖顶栏自己的 1px 下边框；下划线用伪元素画，
+   这样文字按整块高度垂直居中，不会被 3px 边框顶上去。 */
+.topbar .brand.bs,.topbar .brand.nv{
+  position:relative; height:100%; padding:0 12px; border:0; border-radius:0;
+  background:none; color:var(--fg-muted); font-weight:400; font-size:13.5px; gap:0;
+  text-decoration:none;
 }
-/* 首页（副标题按钮）在自己的页上也高亮 */
-.topbar .brand.bs[aria-current="page"]{color:var(--accent); background:var(--accent-soft); border-color:var(--accent)}
-.brand-wrap{position:relative; flex:0 0 auto; display:flex; align-items:center; gap:2px}
-/* ============ 顶栏下拉菜单（品牌区点开） ============ */
+.topbar .brand.bs::after,.topbar .brand.nv::after{
+  content:""; position:absolute; left:0; right:0; bottom:0; height:3px;
+  background:transparent; pointer-events:none;
+}
+.topbar .brand.bs{font-size:14px}
+.topbar .brand.bs:hover,.topbar .brand.nv:hover{
+  background:var(--bg-soft); color:var(--fg); text-decoration:none;
+}
+.topbar .brand.bs[aria-current="page"],.topbar .brand.nv[aria-current="page"]{
+  color:var(--accent); background:none;
+}
+.topbar .brand.bs[aria-current="page"]::after,.topbar .brand.nv[aria-current="page"]::after{
+  background:var(--accent);
+}
+.brand-wrap{position:relative; flex:0 0 auto; display:flex; align-items:center; gap:2px; height:100%}
+
+/* 顶栏右侧带菜单的图标按钮（书签列开关）：外壳只用来给菜单定位 */
+.btn-menu{position:relative; flex:0 0 auto; display:flex; align-items:center; height:100%}
+/* ============ 顶栏下拉菜单（品牌区 / 书签列按钮点开） ============ */
 .menu{
   position:absolute; top:calc(100% + 7px); left:0; min-width:132px; z-index:45;
   padding:4px; background:var(--bg-elev); border:1px solid var(--border);
   border-radius:var(--radius); box-shadow:var(--shadow-md);
 }
+.menu.r{left:auto; right:0}
 .menu-item{
   display:block; width:100%; text-align:left; padding:6px 10px;
   font-size:13.5px; color:var(--fg); border-radius:5px;
@@ -94,10 +112,17 @@ kbd{font-family:var(--font-mono); font-size:.8em; border:1px solid var(--border)
 }
 .menu-item:hover{background:var(--bg-soft); text-decoration:none}
 .menu-item:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
-.topbar .grow{flex:1; min-width:0}
+/* 三选一的那类菜单项：右侧留出对勾位 */
+.menu-item[role="menuitemradio"]{position:relative; padding-right:28px}
+.menu-item[aria-checked="true"]{color:var(--accent); background:var(--accent-soft)}
+.menu-item[aria-checked="true"]::after{
+  content:"\2713"; position:absolute; right:10px; top:50%; transform:translateY(-50%); color:var(--accent);
+}
+.topbar .grow{flex:1; min-width:0; display:flex; align-items:center; height:100%}
 .topbar .path{
   font-family:var(--font-mono); font-size:12.5px; color:var(--fg-muted);
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:left;
+  line-height:1.2; flex:1; min-width:0;
 }
 .btn{
   display:inline-flex; align-items:center; gap:5px; height:32px; padding:0 10px;
@@ -336,6 +361,42 @@ html[data-theme="dark"] .sidebar-foot .warn{color:#ff7b72}
 /* 拖动时两侧一起亮：两条线之间的间距就是当下正文宽度，手里那侧（.w-holding）更实 */
 .w-edge:hover::before,body.w-dragging .w-edge::before{opacity:.5}
 body.w-dragging .w-edge.w-holding::before{opacity:.85}
+/* ============ 左侧书签示意列 ============ */
+/* 固定高度的小地图：整篇按行号比例压缩到这一列，滚动时不动。
+   书签点与当前行标记共用同一条竖线，标记压在点上头；
+   横向位置由 md-app.js 算，右缘离正文文字留 5px。 */
+.bmk-rail{
+  position:fixed; z-index:8; width:16px;
+  top:calc(var(--overlay-h) + 18px); bottom:24px;
+  pointer-events:none;
+}
+.bmk-rail[hidden]{display:none}
+.bmk-rail::before{
+  content:""; position:absolute; top:0; bottom:0; left:50%; width:1px;
+  transform:translateX(-50%); background:var(--border); opacity:.7;
+}
+.bmk-dot{
+  position:absolute; left:50%; width:16px; height:16px; margin-left:-8px;
+  transform:translateY(-50%); display:flex; align-items:center; justify-content:center;
+  padding:0; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg-elev); color:var(--accent); pointer-events:auto;
+  transition:transform .16s var(--ease), box-shadow .16s var(--ease), border-color .16s var(--ease);
+}
+.bmk-dot svg{display:block; width:11px; height:11px}
+.bmk-dot:hover,.bmk-dot:focus-visible{
+  transform:translateY(-50%) scale(1.18); border-color:var(--accent);
+  box-shadow:0 2px 8px var(--accent-glow); outline:none; z-index:1;
+}
+/* 当前行标记：和书签点同一条竖线、压在它上面（自身不吃鼠标，点击仍落到点上） */
+.bmk-cur{
+  position:absolute; left:50%; z-index:2; width:12px; height:12px; margin-left:-6px;
+  transform:translateY(-50%); display:flex; align-items:center; justify-content:center;
+  color:var(--fg-muted); opacity:.9; pointer-events:none;
+  transition:color .16s var(--ease);
+}
+.bmk-cur[hidden]{display:none}
+.bmk-cur svg{display:block; width:12px; height:12px}
+.bmk-cur.on-bmk{color:var(--accent); opacity:1}
 /* 拖动时指针跑得比得上边缘那么快，光标得靠 body 维持，不能指望条子本身 */
 body.w-dragging{cursor:col-resize; user-select:none}
 .article h1,.article h2,.article h3,.article h4,.article h5,.article h6{
@@ -479,6 +540,7 @@ html[data-theme="dark"] .notice{border-color:#9e6a03; background:#2a2008; color:
 .pick-main:hover{text-decoration:none}
 .pick-main:hover .pk-t{color:var(--accent)}
 .pk-t{font-weight:700; font-size:14.5px; line-height:1.5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.pk-ln{margin-left:8px; font-weight:400; font-size:12px; color:var(--fg-muted); font-family:var(--font-mono)}
 .pk-p{font-family:var(--font-mono); font-size:11.5px; color:var(--fg-muted); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .pk-m{font-size:12px; color:var(--fg-muted); margin-top:4px}
 .pick.gone{opacity:.6}
@@ -793,6 +855,7 @@ body.right-hidden .float-tools{right:22px}
 }
 @media (max-width:860px){
   .layout{display:block}
+  .bmk-rail{display:none}       /* 窄屏正文没有左侧留白，示意列让位 */
   .sidebar,.toc{
     position:fixed; top:52px; bottom:0; height:auto; z-index:35; width:min(88vw,300px);
     box-shadow:var(--shadow);
@@ -866,7 +929,7 @@ body.right-hidden .float-tools{right:22px}
 @media print{
   :root{--bg:#fff; --bg-soft:#fff; --bg-elev:#fff; --fg:#000; --fg-muted:#444;
         --border:#bbb; --border-soft:#ddd; --code-bg:#f7f7f7; --quote-bg:#fafafa; --shadow:none}
-  .topbar,.searchbar,.sidebar,.toc,#scrim,.w-edge,.pane-split,.menu,.dlg,.float-tools,.toast,.anchor,.meta .no-print,.intro .anchor{display:none !important}
+  .topbar,.searchbar,.sidebar,.toc,#scrim,.w-edge,.pane-split,.menu,.dlg,.float-tools,.toast,.anchor,.meta .no-print,.intro .anchor,.bmk-rail{display:none !important}
   .layout{display:block}
   main{display:block}
   body.search-open main{padding-top:0}

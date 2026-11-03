@@ -493,16 +493,18 @@ var MarkdownCore = (function () {
   }
 
   /* ---------- 列表 ---------- */
-  function parseList(lines, start, ctx) {
+  function parseList(lines, start, ctx, base) {
+    base = base || 0;
     var first = RE_LIST.exec(lines[start]);
     var ordered = /\d/.test(first[2]);
     var num = ordered ? parseInt(first[2], 10) : 1;
     var markerIndent = first[1].length;
-    var items = [], i = start, loose = false;
+    var items = [], itemLines = [], i = start, loose = false;
 
     while (i < lines.length) {
       var m = RE_LIST.exec(lines[i]);
       if (!m || m[1].length !== markerIndent || /\d/.test(m[2]) !== ordered) break;
+      var itemLine = base + i;
       var contentIndent = m[1].length + m[2].length + m[3].length;
       var item = [m[4]];
       i++;
@@ -528,6 +530,7 @@ var MarkdownCore = (function () {
         item.push(c.trim()); i++;                             // 懒续行
       }
       items.push(item);
+      itemLines.push(itemLine);
       // 条目之间有空行 -> 松列表
       var k = i;
       while (k < lines.length && !lines[k].trim()) k++;
@@ -544,20 +547,25 @@ var MarkdownCore = (function () {
       if (tm) { task = tm[1].toLowerCase() === 'x'; it[0] = tm[2]; }
       var rest = it.slice(1);
       var needsBlocks = loose || rest.some(function (l) { return !l.trim() || startsBlock(l); });
-      var body = needsBlocks ? blocks(it, ctx) : inline(softJoin(it), ctx);
+      var body = needsBlocks ? blocks(it, ctx, itemLines[n]) : inline(softJoin(it), ctx);
       var box = task === null ? '' : '<input type="checkbox" disabled' + (task ? ' checked' : '') + '> ';
-      html += '<li>' + box + body.trim() + '</li>';
+      html += lineMark(itemLines[n]) + '<li>' + box + body.trim() + '</li>';
     }
     return { html: html + '</' + tag + '>', next: i };
   }
   function leadingSpaces(s) { var m = /^( *)/.exec(s); return m[1].length; }
 
   /* ---------- 块级渲染 ---------- */
-  function blocks(lines, ctx) {
+  /* 行号锚点：块的开头留一个 HTML 注释，页面用它把源文件行号映射成滚动位置。
+     注释不占布局、不影响样式，也不污染复制出来的正文。 */
+  function lineMark(n) { return '<!--L' + n + '-->'; }
+  function blocks(lines, ctx, base) {
+    base = base || 0;
     var out = '', i = 0;
     while (i < lines.length) {
       var line = lines[i];
       if (!line.trim()) { i++; continue; }
+      var start = i;
 
       // 围栏代码块
       var fm = RE_FENCE.exec(line);
@@ -574,11 +582,11 @@ var MarkdownCore = (function () {
         // ```mermaid：交给调用方注入的渲染器（页面里是 MermaidCore）生成图表块
         if (ctx.mermaid && ctx.mermaid.isFence && ctx.mermaid.isFence(info)) {
           ctx.mermaidIndex = (ctx.mermaidIndex || 0) + 1;
-          out += ctx.mermaid.block(buf.join('\n'), info, ctx.mermaidIndex);
+          out += lineMark(base + start) + ctx.mermaid.block(buf.join('\n'), info, ctx.mermaidIndex);
           continue;
         }
         var cls = /^[\w+#.-]+$/.test(info) ? ' class="language-' + attr(info.toLowerCase()) + '"' : '';
-        out += '<pre class="code"><code' + cls + '>' + esc(buf.join('\n')) + '\n</code></pre>';
+        out += lineMark(base + start) + '<pre class="code"><code' + cls + '>' + esc(buf.join('\n')) + '\n</code></pre>';
         continue;
       }
 
@@ -595,12 +603,12 @@ var MarkdownCore = (function () {
           }
           cbuf.push(lines[i].slice(4)); i++;
         }
-        out += '<pre class="code"><code>' + esc(cbuf.join('\n')) + '\n</code></pre>';
+        out += lineMark(base + start) + '<pre class="code"><code>' + esc(cbuf.join('\n')) + '\n</code></pre>';
         continue;
       }
 
       // 水平线
-      if (RE_HR.test(line)) { out += '<hr>'; i++; continue; }
+      if (RE_HR.test(line)) { out += lineMark(base + i) + '<hr>'; i++; continue; }
 
       // 标题
       var hm = RE_ATX.exec(line);
@@ -610,7 +618,7 @@ var MarkdownCore = (function () {
         var id;
         if (h && plain(h.text, ctx.html) === plain(hm[2], ctx.html)) { id = h.id; ctx.hIndex++; }
         else { id = slugify(hm[2], ctx.usedSlugs, ctx.html); }
-        out += '<h' + lvl + ' id="' + attr(id) + '">' +
+        out += lineMark(base + i) + '<h' + lvl + ' id="' + attr(id) + '">' +
           '<a class="anchor" href="' + attr(ctx.docHref(ctx.docPath, id)) + '" aria-hidden="true">#</a>' +
           inline(hm[2], ctx) + '</h' + lvl + '>';
         i++;
@@ -625,7 +633,7 @@ var MarkdownCore = (function () {
           if (lines[i].trim() && !startsBlock(lines[i])) { qbuf.push(lines[i]); i++; continue; }
           break;
         }
-        out += '<blockquote>' + blocks(qbuf, ctx) + '</blockquote>';
+        out += lineMark(base + start) + '<blockquote>' + blocks(qbuf, ctx, base + start) + '</blockquote>';
         continue;
       }
 
@@ -654,15 +662,15 @@ var MarkdownCore = (function () {
           }
           tb += '</tr>';
         }
-        out += '<div class="table-wrap"><table><thead>' + th + '</thead>' +
+        out += lineMark(base + start) + '<div class="table-wrap"><table><thead>' + th + '</thead>' +
           (tb ? '<tbody>' + tb + '</tbody>' : '') + '</table></div>';
         continue;
       }
 
       // 列表
       if (RE_LIST.test(line)) {
-        var res = parseList(lines, i, ctx);
-        out += res.html; i = res.next;
+        var res = parseList(lines, i, ctx, base);
+        out += lineMark(base + start) + res.html; i = res.next;
         continue;
       }
 
@@ -671,7 +679,7 @@ var MarkdownCore = (function () {
       while (i < lines.length && lines[i].trim() && !startsBlock(lines[i], false)) { pbuf.push(lines[i]); i++; }
       var pbody = inline(softJoin(pbuf), ctx);
       // strip 模式下只有 HTML 标签的行会被吃空：不再输出空段落
-      if (pbody.trim() || ctx.html !== 'strip') out += '<p>' + pbody + '</p>';
+      if (pbody.trim() || ctx.html !== 'strip') out += lineMark(base + start) + '<p>' + pbody + '</p>';
     }
     return out;
   }

@@ -1,7 +1,7 @@
 /* =====================================================================
  * 界面回归（无头 Chrome + CDP）
  *
- * 覆盖：默认状态、两侧栏开关与 ✕、快捷键、状态记忆、窄屏抽屉与遮罩、
+ * 覆盖：默认状态、两侧栏开关与 ✕、书签列位置菜单、快捷键、状态记忆、窄屏抽屉与遮罩、
  *       实时模式、config.json 改动即时生效、config 写错时的降级提示、
  *       以及全程无 console 错误。截图落在 test/shots/。
  *
@@ -270,6 +270,30 @@ class CDP {
       await cdp.waitFor("(document.getElementById('docPath').textContent||'').length>0");
       await sleep(400);
       check('已打开文档页', await cdp.ev("location.hash.indexOf('p=') >= 0"));
+      /* 书签列：默认挂在正文左侧、离文字 5px；顶栏那枚按钮的三选一菜单能关掉 / 换边 */
+      const railGeom = "(function(){var r=document.getElementById('bmkRail'),a=document.getElementById('article');" +
+        "var b=r.getBoundingClientRect(),ab=a.getBoundingClientRect(),cs=getComputedStyle(a);" +
+        "return JSON.stringify({hidden:r.hidden,gapL:Math.round(ab.left+parseFloat(cs.paddingLeft)-b.right)," +
+        "gapR:Math.round(b.left-(ab.right-parseFloat(cs.paddingRight)))});})()";
+      const rg0 = JSON.parse(await cdp.ev(railGeom));
+      check('书签列默认在正文左侧、离文字 5px', rg0.hidden === false && rg0.gapL === 5, JSON.stringify(rg0));
+      await cdp.ev("document.getElementById('railBtn').click()");
+      check('书签列菜单三项、勾在「文档左侧」', await cdp.ev("(function(){var m=document.getElementById('railMenu');" +
+        "return !m.hidden && m.querySelectorAll('.menu-item').length===3 &&" +
+        "document.querySelector('#railMenu [data-rail=\"left\"]').getAttribute('aria-checked')==='true';})()"));
+      await cdp.ev("document.querySelector('#railMenu [data-rail=\"off\"]').click()");
+      await sleep(250);
+      check('选「关闭」后书签列收起、菜单跟着关', JSON.parse(await cdp.ev(railGeom)).hidden === true &&
+        await cdp.ev("document.getElementById('railMenu').hidden"));
+      await cdp.ev("document.getElementById('railBtn').click()");
+      await cdp.ev("document.querySelector('#railMenu [data-rail=\"right\"]').click()");
+      await sleep(250);
+      const rgR = JSON.parse(await cdp.ev(railGeom));
+      check('选「文档右侧」后换到正文右边、离文字 5px', rgR.hidden === false && rgR.gapR === 5, JSON.stringify(rgR));
+      await cdp.ev("document.getElementById('railBtn').click()");
+      await cdp.ev("document.querySelector('#railMenu [data-rail=\"left\"]').click()");
+      await sleep(250);
+      check('选回「文档左侧」（恢复默认）', JSON.parse(await cdp.ev(railGeom)).gapL === 5);
       await cdp.ev("document.getElementById('brandSub').click()");
       await cdp.waitFor("document.querySelectorAll('.card').length>0");
       await sleep(400);
