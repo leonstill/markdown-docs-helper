@@ -513,6 +513,8 @@ html[data-theme="dark"] .notice{border-color:#9e6a03; background:#2a2008; color:
 .card{
   display:block; padding:13px 15px; border:1px solid var(--border); border-radius:var(--radius);
   background:var(--bg-elev); box-shadow:var(--shadow); color:var(--fg);
+  /* 摘要可能整段是目录树横线这类不可断开的串，允许在任意处折行，别撑出卡片 */
+  overflow-wrap:anywhere;
   transition:border-color .18s var(--ease), box-shadow .22s var(--ease), transform .18s var(--ease);
 }
 .card:hover{
