@@ -1079,8 +1079,9 @@
             '<div class="ct">' + esc(d.title) + '</div>' +
             '<div class="cp">' + esc(dispPath(d.path)) + '</div>' +
             '<div class="cs">' + esc(summaryOf(d)) + '</div>' +
-            '<div class="cc">' + (d.size ? (d.size / 1024).toFixed(1) + ' KB · ' : '') +
-            '约 ' + String(d.text || '').length + ' 字</div></a>';
+            '<div class="cc"><span>' + (d.size ? (d.size / 1024).toFixed(1) + ' KB · ' : '') +
+            '约 ' + String(d.text || '').length + ' 字</span>' +
+            '<span>修改时间：' + fmtTime(d.mtime) + '</span></div></a>';
         });
         html += '</div>';
       });
@@ -1141,6 +1142,7 @@
       '<div class="meta"><span>' + (doc.size ? (doc.size / 1024).toFixed(1) + ' KB' : '') + '</span>' +
       '<span>约 ' + chars + ' 字</span>' +
       '<span>' + out.headings.length + ' 个标题</span>' +
+      '<span>修改时间：' + fmtTime(doc.mtime) + '</span>' +
       '<span class="no-print">' + esc(dispPath(doc.path)) + '</span></div>' +
       docRefsHtml(refs) + out.html;
     $('docPath').textContent = dispPath(doc.path);
