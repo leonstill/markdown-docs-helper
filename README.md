@@ -63,6 +63,8 @@ node build-docs.mjs --serve --port 9000 [目录]
 node build-docs.mjs --serve --lan [目录]    # 绑定所有网卡（0.0.0.0），同一局域网内可访问
 node build-docs.mjs --serve --host 192.168.1.20 [目录]   # 只绑定指定的本机地址
 node build-docs.mjs --exclude a/b [--exclude xxx] [目录]   # 跳过文档目录下的子目录/单个文件，可写多次
+node build-docs.mjs --exclude "a/b|xxx" [目录]             # 多个路径用 | 连在一个参数里
+node build-docs.mjs --title "团队文档" --subtitle "内网" [目录]   # 临时覆盖 config.json 的 title / subtitle
 node build-docs.mjs --help                 # 用法说明
 ```
 
@@ -78,8 +80,22 @@ node build-docs.mjs --exclude xxx --exclude a/b --serve ./
 # 跳过 ./xxx/、./a/b/ 下的全部文件；./a/ 下其它文件照常扫描
 ```
 
+多个路径也可以只写一个参数、用 `|` 连起来（目录/文件名里不可能出现 `|`），
+与写多次 `--exclude` 完全等价：
+
+```
+node build-docs.mjs --exclude "node_modules|dist" --serve ./
+```
+
 绝对路径、用 `..` 跳出文档目录的写法会被拒绝。注意它与 `config.json` 里 `sidebar.exclude`
 不同：后者只是左栏不显示，文档仍会进索引和搜索；`--exclude` 则是根本不扫描。
+
+`--title` / `--subtitle` 临时覆盖 `config.json` 的顶栏标题与副标题，**只对本次构建 / 服务生效，
+不写回配置文件**。想临时清空副标题就写 `--subtitle ""`；`--check` 也按覆盖后的配置与产物比对：
+
+```
+node build-docs.mjs --serve --title "团队文档" --subtitle "内网"
+```
 
 ## 监听地址（`--serve` 专用）
 

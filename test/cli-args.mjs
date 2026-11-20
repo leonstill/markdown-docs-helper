@@ -11,8 +11,10 @@
  *   · --host 缺值、带端口/URL、非法地址、重复、与 --lan 混用、没配 --serve → 报错
  *   · --lan / --host 的真实绑定行为由 test/serve-host.mjs 验证
  *   · --serve 与 --check 混用 → 报错
- *   · --exclude 缺值 / 绝对路径 / .. 跳出目录 / 与独立命令混用 → 报错；
- *     多次 --exclude 真的把目录与单个文件挡在索引外（未被排除的照常收录）
+ *   · --exclude 缺值 / 绝对路径 / .. 跳出目录 / 空段（a||b）/ 与独立命令混用 → 报错；
+ *     多次 --exclude 和「|」分隔真的把目录与单个文件挡在索引外（未被排除的照常收录）
+ *   · --title / --subtitle 缺值、重复、空标题、与独立命令混用 → 报错；
+ *     覆盖值真的进了内置配置、不写回 config.json，且 --check 按覆盖后的配置比对
  *   · 位置目录 + --check / 默认构建 / --help → 正常退出码 0，
  *     并核对内置索引里确实出现了那个目录下的文档（证明参数真的生效）
  *
@@ -108,12 +110,21 @@ rejects('--serve 与 --check 混用被拒绝', ['--serve', '--check'], '只能�
 rejects('--exclude 缺值被拒绝', ['--exclude'], '--exclude 后面要跟相对文档目录的路径');
 rejects('--exclude 绝对路径被拒绝', ['--exclude', path.join(TMP_DOCS, 'xxx')], '不要写绝对路径');
 rejects('--exclude 用 .. 跳出目录被拒绝', ['--exclude', '../xxx'], '不能用 .. 跳出文档目录');
+rejects('--exclude 用 | 分隔时出现空段被拒绝', ['--exclude', 'xxx||a/b'], '每一项都不能为空');
+rejects('--exclude 只写 | 被拒绝', ['--exclude', '|'], '每一项都不能为空');
 rejects('--stamp-version 不接受 --exclude', ['--stamp-version', '--exclude', 'xxx'], '不接受 --exclude');
+rejects('--title 缺值被拒绝', ['--title'], '--title 后面要跟文字');
+rejects('--subtitle 缺值被拒绝', ['--subtitle'], '--subtitle 后面要跟文字');
+rejects('--title 重复被拒绝', ['--title', 'a', '--title', 'b'], '--title 写了两次');
+rejects('--title 空标题被拒绝', ['--title', ''], '--title 不能为空');
+rejects('--stamp-version 不接受 --title', ['--stamp-version', '--title', 'x'], '不接受 --title');
 
 console.log('\n--- 正确写法 ---');
 accepts('--help 打印用法', ['--help'], 'node build-docs.mjs --serve [目录]');
 accepts('--help 里有局域网共享的说明', ['--help'], '--serve --lan [目录]');
 accepts('--help 里有 --exclude 的说明', ['--help'], '--exclude a/b');
+accepts('--help 里有 --exclude 用 | 分隔的写法', ['--help'], '--exclude "a/b|xxx"');
+accepts('--help 里有 --title / --subtitle 的说明', ['--help'], '--title <标题>');
 // 此刻产物是按默认 ./docs 构建的，用外部目录做 --check 应当报过期
 // （如果位置目录被忽略，这里会因为比对的是 ./docs 而误判为最新，用例就会失败）
 rejects('外部目录 + --check 认得出这个目录（过期）', ['--check', TMP_DOCS], '已过期');
@@ -125,18 +136,34 @@ accepts('位置目录 + 构建', [TMP_DOCS], '（命令行指定）');
     '内置索引里出现了外部目录的文档（参数真的生效）', JSON.stringify(idx.docs.map((d) => d.path)));
 }
 accepts('刚构建完，同一个目录 + --check 是最新的', ['--check', TMP_DOCS], '都是最新的');
-accepts('--exclude 多次生效（目录 + 带反斜杠的子目录 + 单个文件）',
-  [TMP_DOCS, '--exclude', 'xxx', '--exclude', 'a\\b', '--exclude', '单个文件.md'],
+accepts('--exclude 多次 + 「|」分隔同时生效（目录 + 带反斜杠的子目录 + 单个文件）',
+  [TMP_DOCS, '--exclude', 'xxx', '--exclude', 'a\\b|单个文件.md'],
   '已刷新文档快照与页面配置');
 {
   const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs-index.json'), 'utf8'));
   const paths = idx.docs.map((d) => d.path);
   check(!paths.some((p) => p.startsWith('docs/xxx/')), 'xxx/ 整个目录被排除（含深层文件）', JSON.stringify(paths));
-  check(!paths.some((p) => p.startsWith('docs/a/b/')), 'a/b/ 子目录被排除（反斜杠写法也认）', JSON.stringify(paths));
-  check(!paths.includes('docs/单个文件.md'), '单个文件也能排除', JSON.stringify(paths));
+  check(!paths.some((p) => p.startsWith('docs/a/b/')), 'a/b/ 子目录被排除（| 分隔 + 反斜杠写法也认）', JSON.stringify(paths));
+  check(!paths.includes('docs/单个文件.md'), '单个文件也能排除（| 分隔）', JSON.stringify(paths));
   check(paths.includes('docs/a/留下来.md') && paths.includes('docs/子目录/示例文档.md'),
     '未被排除的同级文档照常收录', JSON.stringify(paths));
 }
+
+const OVERRIDES = ['--exclude', 'xxx|a\\b|单个文件.md', '--title', '命令行标题', '--subtitle', '命令行副标题'];
+accepts('--title / --subtitle 覆盖内置配置', [TMP_DOCS, ...OVERRIDES], '命令行覆盖 title / subtitle');
+{
+  const viewer = fs.readFileSync(path.join(ROOT, 'md-viewer.html'), 'utf8');
+  const m = /<script id="viewer-config" type="application\/json">([\s\S]*?)<\/script>/.exec(viewer);
+  let cfg = {};
+  try { cfg = m ? JSON.parse(m[1]) : {}; } catch (e) { cfg = {}; }
+  check(cfg.title === '命令行标题' && cfg.subtitle === '命令行副标题',
+    '页面内置配置用了命令行的 title / subtitle', JSON.stringify({ title: cfg.title, subtitle: cfg.subtitle }));
+  const rawCfg = fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8');
+  check(!rawCfg.includes('命令行标题'), '覆盖没有写回 config.json', 'config.json 里出现了命令行标题');
+}
+accepts('同一组覆盖参数 + --check 是最新的', ['--check', TMP_DOCS, ...OVERRIDES], '都是最新的');
+rejects('去掉 --title 后 --check 认得过期（覆盖参与比对）',
+  ['--check', TMP_DOCS, '--exclude', 'xxx|a\\b|单个文件.md'], '已过期');
 
 console.log('\n--- 收尾：用默认 ./docs 重建产物 ---');
 accepts('默认构建（恢复演示文档）', [], '已刷新文档快照与页面配置');

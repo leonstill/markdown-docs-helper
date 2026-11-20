@@ -35,6 +35,8 @@
  *   node build-docs.mjs --serve --lan [目录]   # 绑定所有网卡（0.0.0.0），同一局域网内可访问
  *   node build-docs.mjs --serve --host 192.168.1.20 [目录]   # 只绑定指定的本机地址
  *   node build-docs.mjs --exclude a/b [--exclude xxx] [目录] # 跳过文档目录下的子目录/单个文件（可写多次）
+ *   node build-docs.mjs --exclude "a/b|xxx" [目录]            # 多个路径用「|」连在一个参数里
+ *   node build-docs.mjs --title <标题> [--subtitle <副标题>] [目录] # 临时覆盖 config.json 的 title / subtitle
  *   node build-docs.mjs --stamp-version          # 只刷 VERSION（package.json 的 version+提交短哈希）
  *   node build-docs.mjs --install-hook           # 把 --stamp-version 装成 pre-commit 钩子，提交时自动刷
  *   node build-docs.mjs --help
@@ -43,10 +45,15 @@
  * 参数写错会直接报错退出，绝不会被静默忽略：未知参数、多余目录、坏的端口号、坏的监听地址都会拦下。
  *
  * --exclude（可写多次）：路径相对文档目录，按路径前缀排除，目录与单个文件都可以。
- *   例如 node build-docs.mjs --exclude xxx --exclude a/b --serve ./
+ *   多个路径可以写多次 --exclude，也可以用「|」连在同一个参数里（目录名里不可能有「|」）：
+ *   例如 node build-docs.mjs --exclude "xxx|a/b" --serve ./
  *   会跳过 ./xxx/、./a/b/ 下的全部文件（a/ 下其它文件照常扫描）。
  *   构建、--check、--serve 三种模式都生效；绝对路径和用 .. 跳出文档目录的写法会被拒绝。
  *   与 config.json 的 sidebar.exclude 不同：后者只是左栏不显示，文档仍会进索引与搜索。
+ *
+ * --title / --subtitle：本次构建 / 服务的顶上标题，直接覆盖 config.json 的同名属性，
+ *   但不写回 config.json。例如 node build-docs.mjs --serve --title "团队文档" --subtitle "内网"。
+ *   想临时清空副标题就写 --subtitle ""；--check 也按覆盖后的配置与产物比对。
  *
  * 监听地址（--serve 专用）：默认只绑 127.0.0.1，也就是只有本机能打开。
  *   --lan            = --host 0.0.0.0，绑定所有网卡，启动时会把局域网地址印出来；
@@ -719,6 +726,12 @@ async function build(mode = 'build') {
   const check = mode === 'check';
   const quiet = mode === 'serve';
   const cfg = await readConfig({ createIfMissing: mode === 'build' });
+  /* --title / --subtitle 只改本次构建用的配置（页面里内置的就是覆盖后的值），不写回 config.json */
+  if (titleOverride !== null || subtitleOverride !== null) {
+    cfg.value = { ...cfg.value };
+    if (titleOverride !== null) cfg.value.title = titleOverride;
+    if (subtitleOverride !== null) cfg.value.subtitle = subtitleOverride;
+  }
   const { docs, skipped, files } = await collect({
     withText: true,
     kinds: { md: true, mindmap: mindmapExts(cfg.value) },
@@ -828,7 +841,9 @@ async function build(mode = 'build') {
     console.log(`  左栏显示规则：${visible}` +
       ((sb.exclude || []).length ? ` · 排除 ${(sb.exclude || []).length} 项` : '') +
       (hidden ? ` · 隐藏 ${hidden} 篇` : ''));
-    console.log(`  配置来源：config.json（${cfg.source === 'file' ? '已读取' : '缺失，用默认值'}）`);
+    const overrides = [titleOverride !== null && 'title', subtitleOverride !== null && 'subtitle'].filter(Boolean);
+    console.log(`  配置来源：config.json（${cfg.source === 'file' ? '已读取' : '缺失，用默认值'}）` +
+      (overrides.length ? ` · 命令行覆盖 ${overrides.join(' / ')}（未写回 config.json）` : ''));
     console.log(`  帮助：${helpPages.length} 页（${path.relative(ROOT, HELP_DIR).split(path.sep).join('/')}）`);
     console.log(`  版本：${buildInfo.version}+${buildInfo.commit}` +
       (buildInfo.source === 'VERSION' ? '（VERSION）'
@@ -1240,6 +1255,10 @@ async function serve(port, kinds, host = DEFAULT_HOST, realtimeHtml) {
   if (EXCLUDES.length) {
     console.log(`  排除路径：${EXCLUDES.join('、')}（--exclude，不参与扫描）`);
   }
+  if (titleOverride !== null || subtitleOverride !== null) {
+    const which = [titleOverride !== null && '--title', subtitleOverride !== null && '--subtitle'].filter(Boolean);
+    console.log(`  配置覆盖：${which.join(' / ')}（仅本次运行，不写回 config.json）`);
+  }
   console.log(`  监听地址：${hostForUrl(host)}:${actual}` +
     (wildcard ? `（所有网卡，同一网络内的其它机器可以访问）` :
       isLoopbackHost(host) ? `（仅本机）` : `（指定地址）`));
@@ -1295,6 +1314,8 @@ let portGiven = false;
 let host = DEFAULT_HOST;      // 监听地址：默认只听环回
 let hostFlag = null;          // 记下是用 --host 还是 --lan 指定的（重复/混用要报错）
 let docsDir = null;           // 命令行指定的文档目录（最多一个）
+let titleOverride = null;     // --title：临时覆盖 config.json 的 title（不写回文件）
+let subtitleOverride = null;  // --subtitle：临时覆盖 config.json 的 subtitle
 
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -1348,8 +1369,31 @@ for (let i = 0; i < argv.length; i++) {
     if (v === undefined || v.startsWith('-')) {
       cliError('--exclude 后面要跟相对文档目录的路径，例如：node build-docs.mjs --exclude a/b --serve ./');
     }
-    const norm = normalizeExclude(v);
-    if (!EXCLUDES.includes(norm)) EXCLUDES.push(norm);
+    /* 「|」在任何文件系统的目录/文件名里都不该出现，直接当分隔符：
+       --exclude "node_modules|dist" 等价于写两次 --exclude。分开的每一项按同一条规则校验。 */
+    const parts = v.split('|');
+    if (parts.some((p) => !p.trim())) {
+      cliError(`--exclude 用 | 分隔的每一项都不能为空（收到：${v}）`);
+    }
+    for (const part of parts) {
+      const norm = normalizeExclude(part);
+      if (!EXCLUDES.includes(norm)) EXCLUDES.push(norm);
+    }
+    i++;
+  } else if (a === '--title' || a === '--subtitle') {
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith('-')) {
+      cliError(`${a} 后面要跟文字，例如：node build-docs.mjs ${a} "${a === '--title' ? '我的文档站' : '副标题'}"`);
+    }
+    const text = v.trim();
+    if (a === '--title') {
+      if (titleOverride !== null) cliError('--title 写了两次，只允许一个');
+      if (!text) cliError('--title 不能为空；想用配置文件里的标题就别写这个参数');
+      titleOverride = text;
+    } else {
+      if (subtitleOverride !== null) cliError('--subtitle 写了两次，只允许一个');
+      subtitleOverride = text;
+    }
     i++;
   } else if (a === '--docs') {
     cliError('--docs 已取消：目录直接写在参数后面即可，例如：node build-docs.mjs --serve D:\\some\\docs');
@@ -1375,6 +1419,9 @@ if (action && docsDir !== null) {
 }
 if (action && EXCLUDES.length) {
   cliError(`${action} 不接受 --exclude 参数`);
+}
+if (action && (titleOverride !== null || subtitleOverride !== null)) {
+  cliError(`${action} 不接受 ${titleOverride !== null ? '--title' : '--subtitle'} 参数`);
 }
 
 if (action === '--stamp-version') {
